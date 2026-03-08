@@ -1,6 +1,7 @@
 {
     "name": "JupyterLite Demo",
-    "build": {
+    // "image": "mcr.microsoft.com/devcontainers/python:3.13",
+     "build": {
         "dockerfile": "Dockerfile",
         "context": ".."
     },
@@ -15,5 +16,6 @@
             }
         }
     },
-    "remoteUser": "vscode"
+    // "postCreateCommand": "pip install . && jupyter lite build"
+    "postCreateCommand": "jupyter lite build"
 }

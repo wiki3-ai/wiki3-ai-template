@@ -1,20 +1,16 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "jupyterlite-demo"
-version = "0.1.0"
-description = "JupyterLite demo site"
-requires-python = ">=3.11"
+version = "0.2.0"
+description = "JupyterLite demo template"
+requires-python = ">=3.13"
 dependencies = [
     # Core modules (mandatory)
-    "jupyterlite-core==0.7.1",
-    "jupyterlab~=4.5.1",
-    "notebook~=7.5.1",
+    "jupyterlite-core==0.7.3",
+    "jupyterlab~=4.5.5",
+    "notebook~=7.5.4",
 
     # Python kernel (optional)
-    "jupyterlite-pyodide-kernel==0.7.0",
+    "jupyterlite-pyodide-kernel==0.7.1",
 
     # JavaScript kernel (optional)
     "jupyterlite-javascript-kernel==0.3.0",
@@ -40,16 +36,23 @@ dependencies = [
     # Python: ipyevents library for Jupyter notebooks (optional)
     "ipyevents>=2.0.1",
     # Python: interactive Matplotlib library for Jupyter notebooks (optional)
-    "ipympl>=0.8.2",
+    "ipympl>=0.10.0",
     # Python: ipycanvas library for Jupyter notebooks (optional)
-    "ipycanvas>=0.9.1",
+    "ipycanvas>=0.14.0",
     # Python: ipyleaflet library for Jupyter notebooks (optional)
     "ipyleaflet",
 
     # Python: plotting libraries (optional)
-    "plotly>=6,<7",
+    "plotly>=6.5,<7",
     "bqplot",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = []
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.setuptools]
+packages = ["jupyterlite_demo"]
