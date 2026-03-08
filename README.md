@@ -1,3 +1,13 @@
+# Modernized build for JupyterLite Demo
+
+## Why different build?
+
+`pyproject.toml` and Python package for Hatchling so we can add those things on top.
+
+Using `Dockerfile` in devcontainer because `pip install .` in the `postCreateCommand` doesn't get the extensions.  Not sure why but this works okay.
+
+Could also add a Dockerfile to repo root for running without devcontainer.
+
 # JupyterLite Demo
 
 [![lite-badge](https://jupyterlite.rtfd.io/en/latest/_static/badge.svg)](https://jupyterlite.github.io/demo)

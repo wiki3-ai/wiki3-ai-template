@@ -1,5 +1,7 @@
 {
     "name": "JupyterLite Demo",
+    // If we `pip install .` in the `postCreateCommand` we don't get the extensions.  Why?"
+    // Either way the devcontainer image is better than plain python because we get git."
     // "image": "mcr.microsoft.com/devcontainers/python:3.13",
      "build": {
         "dockerfile": "Dockerfile",
