@@ -71,15 +71,54 @@ export class MemFS {
   private _nodes = new Map<string, INode>();
   private _nextIno = 1;
 
+  /**
+   * The promises-based API surface consumed by isomorphic-git.
+   *
+   * isomorphic-git's FileSystem constructor checks:
+   *   Object.getOwnPropertyDescriptor(fs, 'promises')
+   * If `promises` is an enumerable own property, it calls
+   *   bindFs(this, fs.promises)
+   * Otherwise it calls bindFs(this, fs) and expects readFile etc.
+   * directly on `fs`.
+   *
+   * Class getters are non-enumerable, so isomorphic-git falls through
+   * to the else branch and looks for readFile/writeFile/… directly on `this`.
+   * We expose them as public properties so `.bind()` works.
+   */
+  readFile: (filepath: string, opts?: { encoding?: string }) => Promise<Uint8Array | string>;
+  writeFile: (filepath: string, data: Uint8Array | string, opts?: { mode?: number; encoding?: string }) => Promise<void>;
+  unlink: (filepath: string) => Promise<void>;
+  readdir: (filepath: string) => Promise<string[]>;
+  mkdir: (filepath: string, opts?: { recursive?: boolean }) => Promise<void>;
+  rmdir: (filepath: string) => Promise<void>;
+  stat: (filepath: string) => Promise<IStatResult>;
+  lstat: (filepath: string) => Promise<IStatResult>;
+  readlink: (filepath: string) => Promise<string>;
+  symlink: (target: string, filepath: string) => Promise<void>;
+  chmod: (filepath: string, mode: number) => Promise<void>;
+
   constructor() {
     this._nodes.set('/', {
       type: 'dir',
       mode: 0o755,
       mtimeMs: Date.now(),
     });
+
+    // Bind all fs methods as own properties so isomorphic-git can find them
+    this.readFile = this._readFile.bind(this);
+    this.writeFile = this._writeFile.bind(this);
+    this.unlink = this._unlink.bind(this);
+    this.readdir = this._readdir.bind(this);
+    this.mkdir = this._mkdir.bind(this);
+    this.rmdir = this._rmdir.bind(this);
+    this.stat = this._stat.bind(this);
+    this.lstat = this._stat.bind(this); // no symlinks
+    this.readlink = this._readlink.bind(this);
+    this.symlink = this._symlink.bind(this);
+    this.chmod = this._chmod.bind(this);
   }
 
-  /** The promises-based API surface consumed by isomorphic-git. */
+  /** Legacy getter kept for backwards compat with our own code. */
   get promises(): {
     readFile: Function;
     writeFile: Function;
@@ -94,17 +133,17 @@ export class MemFS {
     chmod: Function;
   } {
     return {
-      readFile: this._readFile.bind(this),
-      writeFile: this._writeFile.bind(this),
-      unlink: this._unlink.bind(this),
-      readdir: this._readdir.bind(this),
-      mkdir: this._mkdir.bind(this),
-      rmdir: this._rmdir.bind(this),
-      stat: this._stat.bind(this),
-      lstat: this._stat.bind(this), // no symlinks
-      readlink: this._readlink.bind(this),
-      symlink: this._symlink.bind(this),
-      chmod: this._chmod.bind(this),
+      readFile: this.readFile,
+      writeFile: this.writeFile,
+      unlink: this.unlink,
+      readdir: this.readdir,
+      mkdir: this.mkdir,
+      rmdir: this.rmdir,
+      stat: this.stat,
+      lstat: this.lstat,
+      readlink: this.readlink,
+      symlink: this.symlink,
+      chmod: this.chmod,
     };
   }
 

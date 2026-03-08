@@ -9,12 +9,13 @@ import {
   JupyterFrontEnd,
   JupyterFrontEndPlugin,
 } from '@jupyterlab/application';
-import { Dialog, showDialog } from '@jupyterlab/apputils';
+import { Dialog, ICommandPalette, showDialog } from '@jupyterlab/apputils';
 import { Widget } from '@lumino/widgets';
-import { deployToGitHub, collectContentsFiles, IFileEntry } from './deploy';
+import { deployToGitHub, collectContentsFiles, syncFromRepo, IFileEntry } from './deploy';
 
-/** Command ID */
+/** Command IDs */
 const CMD_DEPLOY = 'deploy:gh-pages';
+const CMD_SYNC = 'deploy:sync';
 
 /**
  * Build the deploy configuration dialog body.
@@ -67,7 +68,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
   id: 'jupyterlite-deploy:plugin',
   description: 'Deploy JupyterLite sites to GitHub Pages using isomorphic-git',
   autoStart: true,
-  activate: (app: JupyterFrontEnd) => {
+  optional: [ICommandPalette],
+  activate: (app: JupyterFrontEnd, palette: ICommandPalette | null) => {
     console.log('jupyterlite-deploy: activated');
 
     app.commands.addCommand(CMD_DEPLOY, {
@@ -185,12 +187,148 @@ const plugin: JupyterFrontEndPlugin<void> = {
       },
     });
 
-    // Add to the command palette if present
-    const palette = (app as any).commands;
+    // ── Sync from Repository command ───────────────────────────────
+    app.commands.addCommand(CMD_SYNC, {
+      label: 'Sync Files from Repository',
+      caption: 'Pull latest content files from a git branch into JupyterLite',
+      execute: async () => {
+        const syncBody = createSyncDialogBody();
+        const syncResult = await showDialog({
+          title: 'Sync Files from Repository',
+          body: new Widget({ node: syncBody }),
+          buttons: [
+            Dialog.cancelButton(),
+            Dialog.okButton({ label: 'Sync' }),
+          ],
+        });
+
+        if (!syncResult.button.accept) {
+          return;
+        }
+
+        const repoUrl = (
+          syncBody.querySelector('#jl-sync-repo') as HTMLInputElement
+        ).value.trim();
+        const branch = (
+          syncBody.querySelector('#jl-sync-branch') as HTMLInputElement
+        ).value.trim();
+        const token = (
+          syncBody.querySelector('#jl-sync-token') as HTMLInputElement
+        ).value.trim();
+        const contentPath = (
+          syncBody.querySelector('#jl-sync-path') as HTMLInputElement
+        ).value.trim();
+
+        if (!repoUrl) {
+          void showDialog({
+            title: 'Sync Error',
+            body: 'Repository URL is required.',
+            buttons: [Dialog.okButton()],
+          });
+          return;
+        }
+
+        // Persist settings
+        localStorage.setItem('jl-deploy-repo', repoUrl);
+        localStorage.setItem('jl-sync-branch', branch);
+        localStorage.setItem('jl-sync-path', contentPath);
+        if (token) {
+          sessionStorage.setItem('jl-deploy-token', token);
+        }
+
+        // Show progress
+        const statusNode = document.createElement('pre');
+        statusNode.classList.add('jl-deploy-status');
+        statusNode.textContent = 'Starting sync…\n';
+        const statusWidget = new Widget({ node: statusNode });
+
+        void showDialog({
+          title: 'Syncing…',
+          body: statusWidget,
+          buttons: [],
+        });
+
+        const log = (msg: string) => {
+          statusNode.textContent += msg + '\n';
+          statusNode.scrollTop = statusNode.scrollHeight;
+        };
+
+        try {
+          const result = await syncFromRepo(
+            app.serviceManager.contents,
+            {
+              repoUrl,
+              branch: branch || 'gh-pages',
+              token,
+              contentPath,
+              onProgress: log,
+            }
+          );
+          log(`\nComplete: ${result.updated}/${result.total} files updated.`);
+          if (result.updated > 0) {
+            log('Refresh the page to see updated files in the file browser.');
+          }
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log(`\nERROR: ${errMsg}`);
+        }
+
+        await new Promise(r => setTimeout(r, 300));
+        Dialog.flush();
+
+        const finalNode = document.createElement('pre');
+        finalNode.classList.add('jl-deploy-status');
+        finalNode.textContent = statusNode.textContent ?? '';
+        await showDialog({
+          title: 'Sync Result',
+          body: new Widget({ node: finalNode }),
+          buttons: [Dialog.okButton({ label: 'Close' })],
+        });
+      },
+    });
+
+    // Add both commands to the command palette
     if (palette) {
-      console.log('jupyterlite-deploy: command registered as', CMD_DEPLOY);
+      palette.addItem({ command: CMD_DEPLOY, category: 'Deploy' });
+      palette.addItem({ command: CMD_SYNC, category: 'Deploy' });
     }
+
+    console.log('jupyterlite-deploy: commands registered', CMD_DEPLOY, CMD_SYNC);
   },
 };
 
 export default plugin;
+
+/**
+ * Build the sync configuration dialog body.
+ */
+function createSyncDialogBody(): HTMLElement {
+  const body = document.createElement('div');
+  body.classList.add('jl-deploy-dialog');
+  body.innerHTML = `
+    <label for="jl-sync-repo">Repository URL</label>
+    <input id="jl-sync-repo" type="text"
+           placeholder="https://github.com/user/repo.git"
+           value="${localStorage.getItem('jl-deploy-repo') ?? ''}" />
+
+    <label for="jl-sync-branch">Branch</label>
+    <input id="jl-sync-branch" type="text"
+           value="${localStorage.getItem('jl-sync-branch') || 'gh-pages'}" />
+
+    <label for="jl-sync-token">GitHub Token (optional for public repos)</label>
+    <input id="jl-sync-token" type="password"
+           placeholder="ghp_… (leave empty for public repos)"
+           value="${sessionStorage.getItem('jl-deploy-token') ?? ''}" />
+
+    <label for="jl-sync-path">Content subdirectory (optional)</label>
+    <input id="jl-sync-path" type="text"
+           placeholder="e.g. files (empty = sync all)"
+           value="${localStorage.getItem('jl-sync-path') || 'files'}" />
+
+    <p style="font-size: 0.85em; color: var(--jp-ui-font-color2); margin-top: 8px;">
+      This will pull files from the repository and update your local
+      JupyterLite file system, replacing any stale cached versions.
+    </p>
+  `;
+  return body;
+}

@@ -32,6 +32,7 @@
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
     "clean:labextension": "rimraf jupyterlite_deploy/labextension jupyterlite_deploy/_version.py",
     "clean:all": "jlpm clean:lib && jlpm clean:labextension",
+    "test": "jlpm build:lib && node test/test-memfs.mjs",
     "install:extension": "jlpm build",
     "watch": "run-p watch:src watch:labextension",
     "watch:src": "tsc -w --sourceMap",
@@ -64,7 +65,7 @@
     "extension": true,
     "outputDir": "jupyterlite_deploy/labextension",
     "_build": {
-      "load": "static/remoteEntry.2807f28bc6ee9d1bf579.js",
+      "load": "static/remoteEntry.6eafe643aada7bc86727.js",
       "extension": "./extension",
       "style": "./style"
     }

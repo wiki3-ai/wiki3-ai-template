@@ -190,3 +190,143 @@ function encodeContent(model: Contents.IModel): Uint8Array {
   // JSON content (notebooks)
   return new TextEncoder().encode(JSON.stringify(raw, null, 2) + '\n');
 }
+
+// ── Sync / Pull ────────────────────────────────────────────────────────
+
+/** Options for syncing from a remote repo. */
+export interface ISyncOptions {
+  /** Full HTTPS repo URL */
+  repoUrl: string;
+  /** Branch to pull from (default: gh-pages) */
+  branch: string;
+  /** GitHub token (may be empty for public repos) */
+  token: string;
+  /** Only sync files under this subdirectory (e.g. "files") — empty = all */
+  contentPath: string;
+  /** Progress callback */
+  onProgress?: (msg: string) => void;
+}
+
+/**
+ * Pull the latest content files from a remote branch and write them
+ * into the JupyterLite Contents API, replacing stale browser-cached versions.
+ *
+ * For public repos no token is needed.
+ */
+export async function syncFromRepo(
+  contentsManager: Contents.IManager,
+  options: ISyncOptions
+): Promise<{ updated: number; total: number }> {
+  const { repoUrl, branch, token, contentPath, onProgress } = options;
+  const log = (msg: string) => onProgress?.(msg);
+
+  const fs = new MemFS();
+  const dir = '/repo';
+
+  log('Cloning (shallow) from remote…');
+  await git.clone({
+    fs,
+    http,
+    dir,
+    url: repoUrl,
+    ref: branch,
+    singleBranch: true,
+    depth: 1,
+    onAuth: token ? () => ({ username: 'x-access-token', password: token }) : undefined,
+    onMessage: (msg: string) => log(`  remote: ${msg}`),
+  });
+
+  // List all files from the clone
+  const prefix = contentPath ? contentPath.replace(/\/+$/, '') : '';
+  const searchDir = prefix ? dir + '/' + prefix : dir;
+
+  let allFiles: string[];
+  try {
+    allFiles = await listAllFiles(fs, searchDir, '');
+  } catch {
+    log(`No files found under "${prefix || '/'}".`);
+    return { updated: 0, total: 0 };
+  }
+
+  // Filter out git internals and .nojekyll
+  const contentFiles = allFiles.filter(
+    f => !f.startsWith('.git/') && f !== '.git' && f !== '.nojekyll'
+  );
+
+  log(`Found ${contentFiles.length} file(s) in repo.`);
+
+  let updated = 0;
+  for (const relPath of contentFiles) {
+    const fullPath = searchDir + '/' + relPath;
+    const data = (await fs.promises.readFile(fullPath)) as Uint8Array;
+
+    // Determine the target path in the Contents API
+    // Strip the contentPath prefix so files land at the root of JupyterLite's FS
+    const targetPath = relPath;
+
+    // Determine format and content for the Contents API
+    const ext = targetPath.split('.').pop()?.toLowerCase() ?? '';
+    const isNotebook = ext === 'ipynb';
+    const isBinary = [
+      'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'svg',
+      'woff', 'woff2', 'ttf', 'eot', 'pdf', 'zip', 'gz',
+      'whl', 'pyc', 'so', 'wasm'
+    ].includes(ext);
+
+    try {
+      // Ensure parent directories exist
+      const parts = targetPath.split('/');
+      if (parts.length > 1) {
+        let cur = '';
+        for (let i = 0; i < parts.length - 1; i++) {
+          cur = cur ? cur + '/' + parts[i] : parts[i];
+          try {
+            await contentsManager.get(cur);
+          } catch {
+            await contentsManager.save(cur, {
+              type: 'directory',
+              name: parts[i],
+              path: cur,
+            } as any);
+          }
+        }
+      }
+
+      if (isNotebook) {
+        // Parse the notebook JSON and save as notebook type
+        const text = new TextDecoder().decode(data);
+        const nbContent = JSON.parse(text);
+        await contentsManager.save(targetPath, {
+          type: 'notebook',
+          format: 'json',
+          content: nbContent,
+        } as any);
+      } else if (isBinary) {
+        // Save as base64
+        const b64 = btoa(String.fromCharCode(...data));
+        await contentsManager.save(targetPath, {
+          type: 'file',
+          format: 'base64',
+          content: b64,
+        } as any);
+      } else {
+        // Save as text
+        const text = new TextDecoder().decode(data);
+        await contentsManager.save(targetPath, {
+          type: 'file',
+          format: 'text',
+          content: text,
+        } as any);
+      }
+
+      updated++;
+      log(`  ✓ ${targetPath}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`  ✗ ${targetPath}: ${msg}`);
+    }
+  }
+
+  log(`\nSynced ${updated}/${contentFiles.length} file(s).`);
+  return { updated, total: contentFiles.length };
+}

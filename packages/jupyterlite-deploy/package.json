@@ -32,6 +32,7 @@
     "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
     "clean:labextension": "rimraf jupyterlite_deploy/labextension jupyterlite_deploy/_version.py",
     "clean:all": "jlpm clean:lib && jlpm clean:labextension",
+    "test": "jlpm build:lib && node test/test-memfs.mjs",
     "install:extension": "jlpm build",
     "watch": "run-p watch:src watch:labextension",
     "watch:src": "tsc -w --sourceMap",
