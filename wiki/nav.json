@@ -1,0 +1,105 @@
+{
+  "pages": [
+    {
+      "title": "JavaScript in `JupyterLite`",
+      "href": "/wiki/javascript.html"
+    },
+    {
+      "title": "p5 notebook",
+      "href": "/wiki/p5.html"
+    },
+    {
+      "title": "A Python kernel backed by Pyodide",
+      "href": "/wiki/python.html"
+    }
+  ],
+  "dirs": [
+    {
+      "name": "pyodide",
+      "href": "/wiki/pyodide/index.html",
+      "pages": [
+        {
+          "title": "Altair in `JupyterLite`",
+          "href": "/wiki/pyodide/altair.html"
+        },
+        {
+          "title": "`folium` Interactive Map Demo",
+          "href": "/wiki/pyodide/folium.html"
+        },
+        {
+          "title": "`ipywidgets` Interactive Demo",
+          "href": "/wiki/pyodide/interactive-widgets.html"
+        },
+        {
+          "title": "ipycanvas: John Conway's Game Of Life",
+          "href": "/wiki/pyodide/ipycanvas.html"
+        },
+        {
+          "title": "Ipyleaflet",
+          "href": "/wiki/pyodide/ipyleaflet.html"
+        },
+        {
+          "title": "Matplotlib",
+          "href": "/wiki/pyodide/matplotlib.html"
+        },
+        {
+          "title": "Plotly in JupyterLite",
+          "href": "/wiki/pyodide/plotly.html"
+        },
+        {
+          "title": "JupyterLab Renderers",
+          "href": "/wiki/pyodide/renderers.html"
+        }
+      ],
+      "dirs": [
+        {
+          "name": "pyb2d",
+          "href": "/wiki/pyodide/pyb2d/index.html",
+          "pages": [
+            {
+              "title": "Tutorial 0: A free falling body",
+              "href": "/wiki/pyodide/pyb2d/0_tutorial.html"
+            },
+            {
+              "title": "Color Mixing",
+              "href": "/wiki/pyodide/pyb2d/color_mixing.html"
+            },
+            {
+              "title": "Gauss Machine",
+              "href": "/wiki/pyodide/pyb2d/gauss_machine.html"
+            },
+            {
+              "title": "Newtons Cradle",
+              "href": "/wiki/pyodide/pyb2d/newtons_cradle.html"
+            }
+          ],
+          "dirs": [
+            {
+              "name": "games",
+              "href": "/wiki/pyodide/pyb2d/games/index.html",
+              "pages": [
+                {
+                  "title": "Controlls",
+                  "href": "/wiki/pyodide/pyb2d/games/angry_shapes.html"
+                },
+                {
+                  "title": "Controlls",
+                  "href": "/wiki/pyodide/pyb2d/games/billiard.html"
+                },
+                {
+                  "title": "Controlls",
+                  "href": "/wiki/pyodide/pyb2d/games/goo.html"
+                },
+                {
+                  "title": "Controlls",
+                  "href": "/wiki/pyodide/pyb2d/games/rocket.html"
+                }
+              ],
+              "dirs": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

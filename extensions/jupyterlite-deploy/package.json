@@ -1,0 +1,77 @@
+{
+  "name": "jupyterlite-deploy",
+  "version": "0.1.0",
+  "description": "Deploy JupyterLite sites to GitHub Pages using isomorphic-git",
+  "keywords": [
+    "jupyter",
+    "jupyterlab",
+    "jupyterlab-extension",
+    "jupyterlite"
+  ],
+  "license": "BSD-3-Clause",
+  "homepage": "https://github.com/wiki3-ai/jupyterlite-demo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wiki3-ai/jupyterlite-demo.git"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "style": "style/index.css",
+  "files": [
+    "lib/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf}",
+    "style/**/*.{css,js,eot,gif,html,jpg,json,png,svg,woff2,ttf}"
+  ],
+  "scripts": {
+    "build": "jlpm build:lib && jlpm build:labextension:dev",
+    "build:prod": "jlpm clean && jlpm build:lib:prod && jlpm build:labextension",
+    "build:labextension": "jupyter labextension build .",
+    "build:labextension:dev": "jupyter labextension build --development True .",
+    "build:lib": "tsc --sourceMap",
+    "build:lib:prod": "tsc",
+    "clean": "jlpm clean:lib",
+    "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
+    "clean:labextension": "rimraf jupyterlite_deploy/labextension jupyterlite_deploy/_version.py",
+    "clean:all": "jlpm clean:lib && jlpm clean:labextension",
+    "test": "jlpm build:lib && node test/test-memfs.mjs",
+    "install:extension": "jlpm build",
+    "watch": "run-p watch:src watch:labextension",
+    "watch:src": "tsc -w --sourceMap",
+    "watch:labextension": "jupyter labextension watch ."
+  },
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "isomorphic-git": "^1.27.1"
+  },
+  "devDependencies": {
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/builder": "^4.0.0",
+    "@jupyterlab/coreutils": "^6.0.0",
+    "@jupyterlab/services": "^7.0.0",
+    "@jupyterlab/ui-components": "^4.0.0",
+    "@lumino/widgets": "^2.0.0",
+    "npm-run-all2": "^7.0.1",
+    "rimraf": "^5.0.1",
+    "typescript": "~5.0.2"
+  },
+  "sideEffects": [
+    "style/*.css",
+    "style/index.js"
+  ],
+  "styleModule": "style/index.js",
+  "publishConfig": {
+    "access": "public"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "jupyterlite_deploy/labextension",
+    "_build": {
+      "load": "static/remoteEntry.cacab744ce28bd667bf2.js",
+      "extension": "./extension",
+      "style": "./style"
+    }
+  },
+  "jupyterlite": {
+    "liteExtension": true
+  }
+}
