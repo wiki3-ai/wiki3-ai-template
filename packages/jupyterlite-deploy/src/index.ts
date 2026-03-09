@@ -48,12 +48,21 @@ function createDeployDialogBody(): HTMLElement {
            value="${localStorage.getItem('jl-deploy-branch') || 'gh-pages'}" />
 
     <label for="jl-deploy-token">GitHub Token</label>
-    <div style="display: flex; gap: 4px;">
+    <div style="display: flex; gap: 4px; align-items: center;">
       <input id="jl-deploy-token" type="password" style="flex: 1;"
              placeholder="ghp_… or use Login button"
              value="${sessionStorage.getItem('jl-deploy-token') ?? ''}" />
       <button id="jl-deploy-oauth-btn" type="button"
               style="white-space: nowrap; padding: 2px 8px;">Login with GitHub</button>
+      <button id="jl-deploy-clear-token" type="button"
+              style="white-space: nowrap; padding: 2px 8px;">Clear</button>
+    </div>
+    <div style="margin-top: 4px;">
+      <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer;">
+        <input id="jl-deploy-remember-token" type="checkbox"
+               ${sessionStorage.getItem('jl-deploy-token') ? 'checked' : ''} />
+        Remember token for this session
+      </label>
     </div>
 
     <label for="jl-deploy-author">Author</label>
@@ -66,14 +75,23 @@ function createDeployDialogBody(): HTMLElement {
            value="Deploy JupyterLite site" />
   `;
 
-  // Wire up the OAuth login button
+  // Wire up buttons
   setTimeout(() => {
     const btn = body.querySelector('#jl-deploy-oauth-btn') as HTMLButtonElement;
+    const clearBtn = body.querySelector('#jl-deploy-clear-token') as HTMLButtonElement;
     const tokenInput = body.querySelector('#jl-deploy-token') as HTMLInputElement;
     const proxyInput = body.querySelector('#jl-deploy-proxy') as HTMLInputElement;
+    const rememberCb = body.querySelector('#jl-deploy-remember-token') as HTMLInputElement;
     if (btn) {
       btn.addEventListener('click', () => {
         void doOAuthLogin(proxyInput.value.trim(), tokenInput);
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        tokenInput.value = '';
+        rememberCb.checked = false;
+        sessionStorage.removeItem('jl-deploy-token');
       });
     }
   }, 0);
@@ -239,8 +257,13 @@ const plugin: JupyterFrontEndPlugin<void> = {
         localStorage.setItem('jl-deploy-branch', branch);
         localStorage.setItem('jl-deploy-author', authorRaw);
         if (proxyUrl) localStorage.setItem('jl-deploy-proxy', proxyUrl);
-        // Token goes to sessionStorage (cleared when tab closes)
-        sessionStorage.setItem('jl-deploy-token', token);
+        // Only remember token if checkbox is checked
+        const rememberToken = (body.querySelector('#jl-deploy-remember-token') as HTMLInputElement)?.checked;
+        if (rememberToken) {
+          sessionStorage.setItem('jl-deploy-token', token);
+        } else {
+          sessionStorage.removeItem('jl-deploy-token');
+        }
 
         const { name: authorName, email: authorEmail } =
           parseAuthor(authorRaw);
@@ -356,8 +379,11 @@ const plugin: JupyterFrontEndPlugin<void> = {
         localStorage.setItem('jl-sync-branch', branch);
         localStorage.setItem('jl-sync-path', contentPath);
         if (proxyUrl) localStorage.setItem('jl-deploy-proxy', proxyUrl);
-        if (token) {
+        const rememberSyncToken = (syncBody.querySelector('#jl-sync-remember-token') as HTMLInputElement)?.checked;
+        if (token && rememberSyncToken) {
           sessionStorage.setItem('jl-deploy-token', token);
+        } else if (!rememberSyncToken) {
+          sessionStorage.removeItem('jl-deploy-token');
         }
 
         // Show progress
@@ -417,31 +443,44 @@ const plugin: JupyterFrontEndPlugin<void> = {
       label: 'Wiki3.ai Sync: Login with GitHub',
       caption: 'Authenticate with GitHub using the OAuth Device Flow',
       execute: async () => {
-        const proxyUrl = getProxyUrl() || '';
-        const node = document.createElement('div');
-        node.innerHTML = `
-          <label for="jl-login-proxy">CORS Proxy URL</label>
-          <input id="jl-login-proxy" type="text"
-                 placeholder="https://your-worker.workers.dev"
-                 value="${proxyUrl}" />
-        `;
-        const result = await showDialog({
-          title: 'GitHub OAuth Login',
-          body: new Widget({ node }),
-          buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Login' })],
-        });
-        if (!result.button.accept) {
+        const proxyUrl = localStorage.getItem('jl-deploy-proxy') || getProxyUrl() || '';
+        if (!proxyUrl) {
+          // Ask for proxy URL first if none is configured
+          const node = document.createElement('div');
+          node.innerHTML = `
+            <label for="jl-login-proxy">CORS Proxy URL</label>
+            <input id="jl-login-proxy" type="text"
+                   placeholder="https://your-worker.workers.dev" />
+          `;
+          const result = await showDialog({
+            title: 'GitHub OAuth Login',
+            body: new Widget({ node }),
+            buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Continue' })],
+          });
+          if (!result.button.accept) {
+            return;
+          }
+          const proxy = (node.querySelector('#jl-login-proxy') as HTMLInputElement).value.trim();
+          if (!proxy) {
+            return;
+          }
+          localStorage.setItem('jl-deploy-proxy', proxy);
+          // Now launch OAuth with the proxy
+          const dummyInput = document.createElement('input');
+          dummyInput.type = 'hidden';
+          await doOAuthLogin(proxy, dummyInput);
+          if (dummyInput.value) {
+            sessionStorage.setItem('jl-deploy-token', dummyInput.value);
+            console.log('jupyterlite-deploy: OAuth login successful');
+          }
           return;
         }
-        const proxy = (node.querySelector('#jl-login-proxy') as HTMLInputElement).value.trim();
-        if (proxy) {
-          localStorage.setItem('jl-deploy-proxy', proxy);
-        }
-        // Create a hidden dummy input to receive the token
+        // Proxy is already configured — go straight to OAuth
         const dummyInput = document.createElement('input');
         dummyInput.type = 'hidden';
-        await doOAuthLogin(proxy, dummyInput);
+        await doOAuthLogin(proxyUrl, dummyInput);
         if (dummyInput.value) {
+          sessionStorage.setItem('jl-deploy-token', dummyInput.value);
           console.log('jupyterlite-deploy: OAuth login successful');
         }
       },
@@ -482,12 +521,21 @@ function createSyncDialogBody(): HTMLElement {
            value="${localStorage.getItem('jl-sync-branch') || 'gh-pages'}" />
 
     <label for="jl-sync-token">GitHub Token (optional for public repos)</label>
-    <div style="display: flex; gap: 4px;">
+    <div style="display: flex; gap: 4px; align-items: center;">
       <input id="jl-sync-token" type="password" style="flex: 1;"
              placeholder="ghp_… (leave empty for public repos)"
              value="${sessionStorage.getItem('jl-deploy-token') ?? ''}" />
       <button id="jl-sync-oauth-btn" type="button"
               style="white-space: nowrap; padding: 2px 8px;">Login with GitHub</button>
+      <button id="jl-sync-clear-token" type="button"
+              style="white-space: nowrap; padding: 2px 8px;">Clear</button>
+    </div>
+    <div style="margin-top: 4px;">
+      <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer;">
+        <input id="jl-sync-remember-token" type="checkbox"
+               ${sessionStorage.getItem('jl-deploy-token') ? 'checked' : ''} />
+        Remember token for this session
+      </label>
     </div>
 
     <label for="jl-sync-path">Content subdirectory (optional)</label>
@@ -501,14 +549,23 @@ function createSyncDialogBody(): HTMLElement {
     </p>
   `;
 
-  // Wire up OAuth login button
+  // Wire up buttons
   setTimeout(() => {
     const btn = body.querySelector('#jl-sync-oauth-btn') as HTMLButtonElement;
+    const clearBtn = body.querySelector('#jl-sync-clear-token') as HTMLButtonElement;
     const tokenInput = body.querySelector('#jl-sync-token') as HTMLInputElement;
     const proxyInput = body.querySelector('#jl-sync-proxy') as HTMLInputElement;
+    const rememberCb = body.querySelector('#jl-sync-remember-token') as HTMLInputElement;
     if (btn) {
       btn.addEventListener('click', () => {
         void doOAuthLogin(proxyInput.value.trim(), tokenInput);
+      });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        tokenInput.value = '';
+        rememberCb.checked = false;
+        sessionStorage.removeItem('jl-deploy-token');
       });
     }
   }, 0);
