@@ -1,21 +1,17 @@
 name: Re-render wiki pages
 
-# Triggers when the deploy extension (or deploy.sh) pushes notebook
-# changes to the gh-pages branch.  Re-renders wiki HTML and commits
-# the result back to gh-pages.
-#
-# NOTE: For this workflow to fire, the YAML file must exist on the
-#       gh-pages branch itself.  deploy.sh copies it there automatically.
+# Triggers when notebooks are pushed to main (via the deploy extension
+# or a normal git push).  Checks out the gh-pages site, syncs the
+# latest files from main, re-renders wiki HTML, and pushes back to
+# gh-pages.
 
 on:
   push:
-    branches: [gh-pages]
+    branches: [main]
     paths:
       - "files/**"          # only when notebooks change
+  workflow_dispatch:         # allow manual re-render
 
-# Prevent the workflow from re-triggering itself when it commits
-# updated wiki HTML back to gh-pages (those commits only touch wiki/).
-# Belt-and-suspenders: also check the actor.
 concurrency:
   group: wiki-render
   cancel-in-progress: true
@@ -25,14 +21,19 @@ permissions:
 
 jobs:
   render:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout gh-pages
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+
+      - name: Checkout gh-pages branch
         uses: actions/checkout@v4
         with:
           ref: gh-pages
-          fetch-depth: 1
+          path: site
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,14 +43,21 @@ jobs:
       - name: Install rendering dependencies
         run: pip install nbconvert nbformat jinja2
 
-      - name: Render wiki pages
-        run: python .wiki-build/render.py
-
-      - name: Commit updated wiki pages
+      - name: Sync files from main to gh-pages
         run: |
+          rsync -av --delete main/files/ site/files/
+
+      - name: Render wiki pages
+        run: |
+          python main/.github/scripts/render-wiki.py site/ \
+            --templates-dir main/packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates
+
+      - name: Commit and push to gh-pages
+        run: |
+          cd site
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add wiki/
+          git add files/ wiki/ api/
           if git diff --cached --quiet; then
             echo "No wiki changes to commit."
           else

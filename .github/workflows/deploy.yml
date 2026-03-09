@@ -1,10 +1,6 @@
 name: Build and Deploy to GitHub Pages
 
 on:
-  push:
-    branches:
-      - main
-      - wiki
   workflow_dispatch:
 
 permissions:
@@ -64,21 +60,6 @@ jobs:
           test -f _output/wiki/nav.json \
             && echo "✓ nav.json present" \
             || { echo "✗ nav.json missing"; exit 1; }
-
-      - name: Bundle wiki-render infrastructure
-        run: |
-          mkdir -p _output/.github/workflows _output/.wiki-build/templates/wiki
-          cp .github/workflows/wiki-render.yml \
-             _output/.github/workflows/
-          cp scripts/render-wiki.py \
-             _output/.wiki-build/render.py
-          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/index.html.j2 \
-             _output/.wiki-build/templates/wiki/
-          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/conf.json \
-             _output/.wiki-build/templates/wiki/
-          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki_index.html.j2 \
-             _output/.wiki-build/templates/
-          touch _output/.nojekyll
 
       - name: Deploy to gh-pages
         run: |
