@@ -68,10 +68,67 @@
       gap: 0.5rem;
       align-items: center;
     }
+    .wiki-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: calc(100vh - 50px);
+    }
+    .wiki-sidebar {
+      border-right: 1px solid var(--jp-border-color2);
+      background: var(--jp-layout-color1);
+      padding: 0.75rem 0;
+      overflow-y: auto;
+      position: sticky;
+      top: 50px;
+      height: calc(100vh - 50px);
+      font-size: var(--jp-ui-font-size1, 13px);
+    }
+    .wiki-sidebar-loading { padding: 1rem; color: var(--jp-ui-font-color2); }
+    .wiki-nav-section { margin-bottom: 0.25rem; }
+    .wiki-nav-folder-header {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.25rem 0.75rem;
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--jp-ui-font-color1);
+      user-select: none;
+    }
+    .wiki-nav-folder-header:hover { background: var(--jp-layout-color2); }
+    .wiki-nav-arrow {
+      display: inline-block;
+      width: 12px;
+      text-align: center;
+      transition: transform 0.15s;
+      font-size: 10px;
+      color: var(--jp-ui-font-color2);
+    }
+    .wiki-nav-arrow.open { transform: rotate(90deg); }
+    .wiki-nav-items { list-style: none; margin: 0; padding: 0; }
+    .wiki-nav-items.collapsed { display: none; }
+    .wiki-nav-item a {
+      display: block;
+      padding: 0.25rem 0.75rem 0.25rem 1.5rem;
+      color: var(--jp-content-link-color, var(--jp-ui-font-color1));
+      text-decoration: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .wiki-nav-item a:hover { background: var(--jp-layout-color2); text-decoration: none; }
+    .wiki-nav-item.active a {
+      font-weight: 600;
+      background: var(--jp-brand-color3, rgba(33, 150, 243, 0.12));
+      border-right: 3px solid var(--jp-brand-color1);
+    }
+    .wiki-nav-nested .wiki-nav-item a { padding-left: 2.25rem; }
+    .wiki-nav-nested .wiki-nav-nested .wiki-nav-item a { padding-left: 3rem; }
     .wiki-main {
       max-width: 960px;
       margin: 0 auto;
       padding: 1rem 1.5rem;
+      min-width: 0;
     }
     .wiki-breadcrumbs {
       display: flex;
@@ -82,9 +139,6 @@
     .wiki-breadcrumb-sep {
       color: var(--jp-ui-font-color2);
       margin: 0 0.125rem;
-    }
-    .wiki-breadcrumb-current {
-      font-weight: 600;
     }
     .wiki-share-success {
       box-shadow: 0 0 0 2px var(--jp-success-color1);
@@ -99,6 +153,31 @@
       clip: rect(0, 0, 0, 0);
       border: 0;
     }
+    .wiki-sidebar-toggle {
+      display: none;
+      background: none;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      padding: 0.25rem;
+      font-size: 1.25rem;
+      line-height: 1;
+    }
+    @media (max-width: 768px) {
+      .wiki-layout { grid-template-columns: 1fr; }
+      .wiki-sidebar {
+        display: none;
+        position: fixed;
+        top: 50px;
+        left: 0;
+        width: 280px;
+        height: calc(100vh - 50px);
+        z-index: 999;
+        box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+      }
+      .wiki-sidebar.open { display: block; }
+      .wiki-sidebar-toggle { display: inline-flex; }
+    }
   </style>
 {% endblock extra_css %}
 
@@ -110,6 +189,7 @@
   {% endif %}
   <div class="wiki-toolbar" role="toolbar" aria-label="Notebook actions">
     <div class="wiki-toolbar-left">
+      <button class="wiki-sidebar-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.wiki-sidebar').classList.toggle('open')">&#9776;</button>
       <a class="jp-Button" href="{{ resources.wiki_toolbar.home_href }}">home</a>
       {% if resources.wiki_toolbar.breadcrumbs %}
       <nav class="wiki-breadcrumbs" aria-label="Breadcrumb">
@@ -135,11 +215,16 @@
       {% endfor %}
     </div>
   </div>
-  <main class="wiki-main">
+  <div class="wiki-layout">
+    <nav class="wiki-sidebar" aria-label="Wiki navigation">
+      <div class="wiki-sidebar-loading">Loading navigation&hellip;</div>
+    </nav>
+    <main class="wiki-main">
 {% endblock body_header %}
 
 {% block body_footer %}
-  </main>
+    </main>
+  </div>
   <div id="wiki-share-status" class="wiki-sr-only" aria-live="polite"></div>
 </body>
 {% endblock body_footer %}

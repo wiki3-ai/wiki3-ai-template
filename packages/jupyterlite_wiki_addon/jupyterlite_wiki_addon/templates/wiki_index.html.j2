@@ -68,6 +68,62 @@
       gap: 0.5rem;
       align-items: center;
     }
+    .wiki-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: calc(100vh - 50px);
+    }
+    .wiki-sidebar {
+      border-right: 1px solid var(--jp-border-color2);
+      background: var(--jp-layout-color1);
+      padding: 0.75rem 0;
+      overflow-y: auto;
+      position: sticky;
+      top: 50px;
+      height: calc(100vh - 50px);
+      font-size: var(--jp-ui-font-size1, 13px);
+    }
+    .wiki-sidebar-loading { padding: 1rem; color: var(--jp-ui-font-color2); }
+    .wiki-nav-section { margin-bottom: 0.25rem; }
+    .wiki-nav-folder-header {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.25rem 0.75rem;
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--jp-ui-font-color1);
+      user-select: none;
+    }
+    .wiki-nav-folder-header:hover { background: var(--jp-layout-color2); }
+    .wiki-nav-arrow {
+      display: inline-block;
+      width: 12px;
+      text-align: center;
+      transition: transform 0.15s;
+      font-size: 10px;
+      color: var(--jp-ui-font-color2);
+    }
+    .wiki-nav-arrow.open { transform: rotate(90deg); }
+    .wiki-nav-items { list-style: none; margin: 0; padding: 0; }
+    .wiki-nav-items.collapsed { display: none; }
+    .wiki-nav-item a {
+      display: block;
+      padding: 0.25rem 0.75rem 0.25rem 1.5rem;
+      color: var(--jp-content-link-color, var(--jp-ui-font-color1));
+      text-decoration: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .wiki-nav-item a:hover { background: var(--jp-layout-color2); text-decoration: none; }
+    .wiki-nav-item.active a {
+      font-weight: 600;
+      background: var(--jp-brand-color3, rgba(33, 150, 243, 0.12));
+      border-right: 3px solid var(--jp-brand-color1);
+    }
+    .wiki-nav-nested .wiki-nav-item a { padding-left: 2.25rem; }
+    .wiki-nav-nested .wiki-nav-nested .wiki-nav-item a { padding-left: 3rem; }
     .wiki-breadcrumbs {
       display: flex;
       align-items: center;
@@ -85,6 +141,7 @@
       max-width: 960px;
       margin: 0 auto;
       padding: 1rem 1.5rem;
+      min-width: 0;
     }
     .wiki-list {
       list-style: none;
@@ -198,6 +255,34 @@
     .wiki-folder-contents.wiki-expanded {
       display: block;
     }
+    .wiki-sidebar-toggle {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: inherit;
+      font-size: 18px;
+    }
+    @media (max-width: 768px) {
+      .wiki-sidebar-toggle { display: inline-flex; }
+      .wiki-layout { grid-template-columns: 1fr; }
+      .wiki-sidebar {
+        display: none;
+        position: fixed;
+        top: 50px;
+        left: 0;
+        width: 260px;
+        height: calc(100vh - 50px);
+        z-index: 999;
+        box-shadow: 2px 0 8px rgba(0,0,0,.15);
+      }
+      .wiki-sidebar.open { display: block; }
+    }
     @media (max-width: 480px) {
       .wiki-row {
         grid-template-columns: 1fr;
@@ -215,6 +300,7 @@
 <body class="jp-mod-light" data-jp-theme-light="true" data-jp-theme-name="JupyterLite Light">
   <div class="wiki-toolbar" role="toolbar" aria-label="Wiki navigation">
     <div class="wiki-toolbar-left">
+      <button class="wiki-sidebar-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.wiki-sidebar').classList.toggle('open')">&#9776;</button>
       <a class="jp-Button wiki-home" href="/">home</a>
       {% if breadcrumbs %}
       <nav class="wiki-breadcrumbs" aria-label="Breadcrumb">
@@ -232,7 +318,11 @@
       <a class="jp-Button wiki-action-button" href="/lab/index.html" target="_blank" rel="noopener noreferrer">lab</a>
     </div>
   </div>
-  <main class="wiki-main">
+  <div class="wiki-layout">
+    <nav class="wiki-sidebar">
+      <div class="wiki-sidebar-loading">Loading navigation&hellip;</div>
+    </nav>
+    <main class="wiki-main">
     {% if entries %}
     <section class="wiki-files">
       <ul class="wiki-list" role="list">
@@ -278,6 +368,7 @@
     <p>No notebooks found in this directory.</p>
     {% endif %}
   </main>
+  </div>
   <div id="wiki-share-status" class="wiki-sr-only" aria-live="polite"></div>
   <script src="{{ behavior_script_url }}"></script>
 </body>

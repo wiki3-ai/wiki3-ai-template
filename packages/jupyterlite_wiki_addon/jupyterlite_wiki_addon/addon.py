@@ -1,6 +1,7 @@
 from importlib.metadata import version
 from pathlib import Path
 import html
+import json
 import os
 from urllib.parse import quote
 from collections import defaultdict
@@ -114,6 +115,18 @@ class WikiPageAddon(BaseAddon):
                     (self._generate_index_page, [wiki_dir, files_dir, output_dir, subdir]),
                 ],
             )
+        
+        # Yield task for navigation JSON (used by sidebar)
+        nav_json_file = wiki_dir / "nav.json"
+        yield self.task(
+            name="generate:nav.json",
+            doc="generate navigation tree JSON for sidebar",
+            file_dep=all_output_files,
+            targets=[nav_json_file],
+            actions=[
+                (self._generate_nav_json, [wiki_dir, files_dir, nav_json_file]),
+            ],
+        )
     
     def _convert_notebook(self, notebook_path, output_file, files_dir, output_dir):
         """Convert a single notebook to HTML"""
@@ -305,6 +318,57 @@ class WikiPageAddon(BaseAddon):
             f.write(index_html)
         
         print(f"[WikiPageAddon] Generated index page: {index_file}")
+
+    def _generate_nav_json(self, wiki_dir, files_dir, nav_json_file):
+        """Generate a navigation tree JSON file for the sidebar."""
+        nav_tree = self._build_nav_tree(wiki_dir, files_dir, Path('.'))
+        nav_json_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(nav_json_file, 'w', encoding='utf-8') as f:
+            json.dump(nav_tree, f, indent=2)
+        print(f"[WikiPageAddon] Generated nav: {nav_json_file}")
+
+    def _build_nav_tree(self, wiki_dir, files_dir, current_dir):
+        """Recursively build a navigation tree from the wiki directory."""
+        current_wiki_dir = wiki_dir / current_dir
+        
+        # Collect pages (HTML files, excluding index.html)
+        pages = []
+        html_files = sorted(
+            [f for f in current_wiki_dir.glob("*.html") if f.name != "index.html"],
+            key=lambda f: f.name,
+        )
+        for html_file in html_files:
+            html_rel = html_file.relative_to(wiki_dir)
+            nb_rel = html_rel.with_suffix('.ipynb')
+            notebook_path = files_dir / nb_rel
+            
+            title = nb_rel.stem.replace('-', ' ').replace('_', ' ').title()
+            if notebook_path.exists():
+                try:
+                    with open(notebook_path, 'r', encoding='utf-8') as f:
+                        nb = nbformat.read(f, as_version=4)
+                    title = self._extract_notebook_title(nb, notebook_path)
+                except Exception:
+                    pass
+            
+            pages.append({
+                "title": title,
+                "href": "/wiki/" + quote(html_rel.as_posix(), safe='/'),
+            })
+        
+        # Collect subdirectories (recursively)
+        dirs = []
+        for subdir in sorted(current_wiki_dir.iterdir()):
+            if subdir.is_dir() and any(subdir.rglob("*.html")):
+                child_rel = subdir.relative_to(wiki_dir)
+                child_tree = self._build_nav_tree(wiki_dir, files_dir, child_rel)
+                dirs.append({
+                    "name": subdir.name,
+                    "href": "/wiki/" + quote((child_rel / "index.html").as_posix(), safe='/'),
+                    **child_tree,
+                })
+        
+        return {"pages": pages, "dirs": dirs}
 
     def _extract_notebook_title(self, nb, notebook_path):
         """Best effort to pull a title from the notebook."""
