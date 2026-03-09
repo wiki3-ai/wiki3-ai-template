@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages-deploy
@@ -13,6 +15,9 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +66,7 @@ jobs:
             && echo "✓ nav.json present" \
             || { echo "✗ nav.json missing"; exit 1; }
 
-      - name: Deploy to gh-pages
+      - name: Push built site to gh-pages branch
         run: |
           cd _output
           git init
@@ -72,3 +77,12 @@ jobs:
           git commit -m "Deploy JupyterLite site"
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           git push --force origin gh-pages
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _output/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

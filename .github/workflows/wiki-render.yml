@@ -18,10 +18,15 @@ concurrency:
 
 permissions:
   contents: write            # push back to gh-pages
+  pages: write
+  id-token: write
 
 jobs:
   render:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout main branch
         uses: actions/checkout@v4
@@ -64,3 +69,12 @@ jobs:
             git commit -m "Auto-render wiki pages [skip ci]"
             git push
           fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
