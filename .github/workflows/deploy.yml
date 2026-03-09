@@ -38,7 +38,7 @@ jobs:
       - name: Build deploy extension (JS)
         working-directory: packages/jupyterlite-deploy
         run: |
-          jlpm install
+          jlpm install --no-immutable
           jlpm build:prod
 
       - name: Install deploy extension
