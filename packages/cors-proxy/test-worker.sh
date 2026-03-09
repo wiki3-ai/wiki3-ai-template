@@ -2,6 +2,15 @@
 # ─────────────────────────────────────────────────────────────────────
 # test-worker.sh — Smoke tests for the wiki3-ai-sync-proxy worker
 #
+# Tests:
+#   1. Health check
+#   2. CORS preflight (basic)
+#   3. CORS preflight for API proxy (X-GitHub-Api-Version)
+#   4. Git smart HTTP proxy (info/refs)
+#   5. Route allowlist — blocked routes
+#   6. OAuth authorize redirect
+#   7. Unknown route → 404
+#
 # Usage:
 #   bash test-worker.sh [worker-url]
 #
@@ -29,24 +38,6 @@ check_status() {
   fi
 }
 
-check_json_field() {
-  local label="$1" url="$2" field="$3" expected="$4" method="${5:-GET}" body="${6:-}"
-  local value
-  if [[ -n "$body" ]]; then
-    value=$(curl -s -X "$method" -H "Origin: $ORIGIN" \
-      -H "Content-Type: application/json" -d "$body" "$url" | \
-      python3 -c "import sys,json; print(json.load(sys.stdin).get('$field',''))")
-  else
-    value=$(curl -s -X "$method" -H "Origin: $ORIGIN" "$url" | \
-      python3 -c "import sys,json; print(json.load(sys.stdin).get('$field',''))")
-  fi
-  if [[ "$value" == "$expected" ]]; then
-    pass "$label ($field=$value)"
-  else
-    fail "$label — expected $field=$expected, got $field=$value"
-  fi
-}
-
 check_cors_header() {
   local label="$1" url="$2" method="${3:-GET}"
   local acao
@@ -67,12 +58,26 @@ echo ""
 # ── 1. Health check ──────────────────────────────────────────────────
 echo "1. Health check (/oauth/status)"
 check_status  "GET returns 200"     "$WORKER_URL/oauth/status" "200"
-check_json_field "ok is true"       "$WORKER_URL/oauth/status" "ok" "True"
-check_json_field "hasClientId"      "$WORKER_URL/oauth/status" "hasClientId" "True"
-check_cors_header "CORS header"     "$WORKER_URL/oauth/status"
+
+status_json=$(curl -s -H "Origin: $ORIGIN" "$WORKER_URL/oauth/status")
+ok=$(echo "$status_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ok',''))" 2>/dev/null)
+if [[ "$ok" == "True" ]]; then
+  pass "ok is true"
+else
+  fail "ok is not true: $ok"
+fi
+
+hasClientId=$(echo "$status_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('hasClientId',''))" 2>/dev/null)
+if [[ "$hasClientId" == "True" ]]; then
+  pass "hasClientId is true (OAuth configured)"
+else
+  fail "hasClientId is false"
+fi
+
+check_cors_header "CORS header" "$WORKER_URL/oauth/status"
 echo ""
 
-# ── 2. CORS preflight ───────────────────────────────────────────────
+# ── 2. CORS preflight (basic) ───────────────────────────────────────
 echo "2. CORS preflight (OPTIONS)"
 status=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS \
   -H "Origin: $ORIGIN" \
@@ -86,8 +91,8 @@ fi
 check_cors_header "Preflight CORS header" "$WORKER_URL/oauth/status" "OPTIONS"
 echo ""
 
-# ── 2b. CORS preflight for API proxy (X-GitHub-Api-Version) ─────────
-echo "2b. CORS preflight for API proxy"
+# ── 3. CORS preflight for API proxy (X-GitHub-Api-Version) ──────────
+echo "3. CORS preflight for API proxy"
 preflight_url="$WORKER_URL/proxy/https://api.github.com/repos/wiki3-ai/jupyterlite-demo/git/ref/heads/gh-pages"
 preflight_headers=$(curl -s -D- -o /dev/null -X OPTIONS \
   -H "Origin: $ORIGIN" \
@@ -114,71 +119,101 @@ else
 fi
 echo ""
 
-# ── 3. Git proxy — public repo smart HTTP discovery ─────────────────
-echo "3. Git proxy (/proxy/ → github.com)"
+# ── 4. Git proxy — allowed route ────────────────────────────────────
+echo "4. Git proxy — allowed route (/proxy/ → github.com)"
 check_status "info/refs returns 200" \
   "$WORKER_URL/proxy/wiki3-ai/jupyterlite-demo.git/info/refs?service=git-upload-pack" "200"
 check_cors_header "Proxy CORS header" \
   "$WORKER_URL/proxy/wiki3-ai/jupyterlite-demo.git/info/refs?service=git-upload-pack"
 
-# Verify it returns git smart-HTTP content
 content_type=$(curl -s -D- -o /dev/null \
   -H "Origin: $ORIGIN" \
   "$WORKER_URL/proxy/wiki3-ai/jupyterlite-demo.git/info/refs?service=git-upload-pack" | \
   grep -i '^content-type:' | tr -d '\r')
 if echo "$content_type" | grep -qi "git-upload-pack"; then
-  pass "Content-Type is git smart HTTP ($content_type)"
+  pass "Content-Type is git smart HTTP"
 else
   fail "Unexpected Content-Type: $content_type"
 fi
 echo ""
 
-# ── 4. OAuth Device Flow — start ────────────────────────────────────
-echo "4. OAuth Device Flow (/oauth/device)"
-check_status "POST returns 200" \
-  "$WORKER_URL/oauth/device" "200" "POST" 
+# ── 5. Route allowlist — blocked routes ──────────────────────────────
+echo "5. Route allowlist — blocked routes"
 
-device_resp=$(curl -s -X POST -H "Origin: $ORIGIN" \
-  -H "Content-Type: application/json" \
-  -d '{"scope":"public_repo"}' \
-  "$WORKER_URL/oauth/device")
-echo "  Response: $device_resp"
-
-user_code=$(echo "$device_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user_code',''))" 2>/dev/null)
-device_code=$(echo "$device_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('device_code',''))" 2>/dev/null)
-verification_uri=$(echo "$device_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('verification_uri',''))" 2>/dev/null)
-
-if [[ -n "$user_code" && -n "$device_code" ]]; then
-  pass "Got user_code=$user_code, device_code=${device_code:0:8}…"
+# git-receive-pack should be blocked
+status=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Origin: $ORIGIN" \
+  "$WORKER_URL/proxy/wiki3-ai/jupyterlite-demo.git/info/refs?service=git-receive-pack")
+if [[ "$status" == "403" ]]; then
+  pass "git-receive-pack blocked (403)"
 else
-  fail "Missing user_code or device_code"
+  fail "git-receive-pack should be 403, got $status"
 fi
-if [[ "$verification_uri" == *"github.com"* ]]; then
-  pass "verification_uri points to GitHub ($verification_uri)"
+
+# DELETE on refs should be blocked
+status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Origin: $ORIGIN" \
+  "$WORKER_URL/proxy/https://api.github.com/repos/wiki3-ai/jupyterlite-demo/git/refs/heads/gh-pages")
+if [[ "$status" == "403" ]]; then
+  pass "DELETE refs blocked (403)"
 else
-  fail "Unexpected verification_uri: $verification_uri"
+  fail "DELETE refs should be 403, got $status"
+fi
+
+# Repo admin API should be blocked
+status=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Origin: $ORIGIN" \
+  "$WORKER_URL/proxy/https://api.github.com/repos/wiki3-ai/jupyterlite-demo")
+if [[ "$status" == "403" ]]; then
+  pass "GET repo admin API blocked (403)"
+else
+  fail "GET repo admin should be 403, got $status"
+fi
+
+# User API should be blocked
+status=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Origin: $ORIGIN" \
+  "$WORKER_URL/proxy/https://api.github.com/user")
+if [[ "$status" == "403" ]]; then
+  pass "GET /user blocked (403)"
+else
+  fail "GET /user should be 403, got $status"
+fi
+
+# Non-GitHub host should be blocked
+status=$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Origin: $ORIGIN" \
+  "$WORKER_URL/proxy/https://evil.com/steal-tokens")
+if [[ "$status" == "403" ]]; then
+  pass "Non-GitHub host blocked (403)"
+else
+  fail "Non-GitHub host should be 403, got $status"
 fi
 echo ""
 
-# ── 5. OAuth Token poll (should get authorization_pending) ───────────
-echo "5. OAuth Token poll (/oauth/token)"
-token_resp=$(curl -s -X POST -H "Origin: $ORIGIN" \
-  -H "Content-Type: application/json" \
-  -d "{\"device_code\":\"$device_code\"}" \
-  "$WORKER_URL/oauth/token")
-echo "  Response: $token_resp"
-
-error_val=$(echo "$token_resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',''))" 2>/dev/null)
-if [[ "$error_val" == "authorization_pending" ]]; then
-  pass "Token poll returns authorization_pending (expected)"
+# ── 6. OAuth authorize redirect ─────────────────────────────────────
+echo "6. OAuth authorize redirect"
+redirect_url=$(curl -s -o /dev/null -w '%{redirect_url}' \
+  "$WORKER_URL/oauth/authorize?nonce=test123&return_origin=$ORIGIN")
+if echo "$redirect_url" | grep -q 'github.com/login/oauth/authorize'; then
+  pass "Redirects to GitHub OAuth"
 else
-  fail "Unexpected token response error: $error_val"
+  fail "Expected redirect to github.com/login/oauth/authorize, got: $redirect_url"
 fi
-check_cors_header "Token poll CORS header" "$WORKER_URL/oauth/token" "POST"
+if echo "$redirect_url" | grep -q 'scope=public_repo'; then
+  pass "Scope is public_repo"
+else
+  fail "Missing scope=public_repo in redirect URL"
+fi
+if echo "$redirect_url" | grep -q 'redirect_uri='; then
+  pass "Has redirect_uri (callback URL)"
+else
+  fail "Missing redirect_uri in redirect URL"
+fi
 echo ""
 
-# ── 6. 404 on unknown route ─────────────────────────────────────────
-echo "6. Unknown route"
+# ── 7. Unknown route → 404 ──────────────────────────────────────────
+echo "7. Unknown route"
 check_status "Returns 404" "$WORKER_URL/nonexistent" "404"
 echo ""
 

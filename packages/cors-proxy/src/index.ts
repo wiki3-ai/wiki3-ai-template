@@ -1,21 +1,31 @@
 /**
- * Cloudflare Worker: CORS proxy for isomorphic-git + GitHub OAuth Device Flow.
+ * Cloudflare Worker: Restricted CORS proxy + GitHub OAuth Web Flow.
+ *
+ * SECURITY: The proxy ONLY allows the specific GitHub API operations
+ * needed by Wiki3.ai Sync. All other routes are blocked.
  *
  * Routes:
- *   /proxy/*          → Proxies requests to github.com, adding CORS headers.
- *                       isomorphic-git sends requests like:
- *                         GET  /<owner>/<repo>.git/info/refs?service=git-upload-pack
- *                         POST /<owner>/<repo>.git/git-upload-pack
- *                         POST /<owner>/<repo>.git/git-receive-pack
+ *   /proxy/*           → Restricted proxy (see ALLOWED_ROUTES below)
+ *   /oauth/authorize    → Redirects to GitHub OAuth (web flow)
+ *   /oauth/callback     → Handles GitHub callback, returns token via postMessage
+ *   /oauth/status       → Health check
  *
- *   /oauth/device      → POST: Start GitHub Device Flow (returns user_code, verification_uri)
- *   /oauth/token        → POST: Poll for access token (exchanges device_code for token)
- *   /oauth/status       → GET:  Health check
+ * Allowed proxy operations:
+ *   Pull (git smart HTTP):
+ *     GET  /<owner>/<repo>.git/info/refs?service=git-upload-pack
+ *     POST /<owner>/<repo>.git/git-upload-pack
+ *   Push (Git Data API):
+ *     GET   /repos/<o>/<r>/git/ref/<ref>
+ *     GET   /repos/<o>/<r>/git/refs/<prefix>
+ *     GET   /repos/<o>/<r>/git/trees/<sha>
+ *     GET   /repos/<o>/<r>/git/commits/<sha>
+ *     POST  /repos/<o>/<r>/git/blobs
+ *     POST  /repos/<o>/<r>/git/trees
+ *     POST  /repos/<o>/<r>/git/commits
+ *     POST  /repos/<o>/<r>/git/refs
+ *     PATCH /repos/<o>/<r>/git/refs/<ref>
  *
- * Environment variables (set as secrets or in wrangler.toml):
- *   GITHUB_CLIENT_ID     — OAuth App client ID
- *   GITHUB_CLIENT_SECRET — OAuth App client secret
- *   ALLOWED_ORIGINS      — Comma-separated allowed origins, or "*"
+ * Blocked: DELETE, repo admin, user API, workflows, issues, etc.
  */
 
 export interface Env {
@@ -39,11 +49,11 @@ export default {
       if (url.pathname.startsWith('/proxy/')) {
         return corsResponse(await handleProxy(request, url), origin, env);
       }
-      if (url.pathname === '/oauth/device') {
-        return corsResponse(await handleDeviceCode(request, env), origin, env);
+      if (url.pathname === '/oauth/authorize') {
+        return handleOAuthAuthorize(url, env);
       }
-      if (url.pathname === '/oauth/token') {
-        return corsResponse(await handleDeviceToken(request, env), origin, env);
+      if (url.pathname === '/oauth/callback') {
+        return await handleOAuthCallback(url, env);
       }
       if (url.pathname === '/oauth/status') {
         return corsResponse(
@@ -70,42 +80,118 @@ export default {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// Git CORS Proxy
+// Route allowlist — only these GitHub API calls are proxied
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Allowed API routes on api.github.com (method + path regex). */
+const ALLOWED_API_ROUTES: Array<{ method: string; pattern: RegExp; desc: string }> = [
+  // Read refs (singular and plural forms)
+  { method: 'GET',   pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs?(\/|$)/, desc: 'read ref(s)' },
+  // Read tree (recursive metadata, no blob content)
+  { method: 'GET',   pattern: /^\/repos\/[^/]+\/[^/]+\/git\/trees\/[a-f0-9]+$/, desc: 'read tree' },
+  // Read commit (to get tree SHA from commit)
+  { method: 'GET',   pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits\/[a-f0-9]+$/, desc: 'read commit' },
+  // Create blob (upload file content)
+  { method: 'POST',  pattern: /^\/repos\/[^/]+\/[^/]+\/git\/blobs$/, desc: 'create blob' },
+  // Create tree
+  { method: 'POST',  pattern: /^\/repos\/[^/]+\/[^/]+\/git\/trees$/, desc: 'create tree' },
+  // Create commit
+  { method: 'POST',  pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits$/, desc: 'create commit' },
+  // Create ref (new branch)
+  { method: 'POST',  pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs$/, desc: 'create ref' },
+  // Update ref (advance branch pointer)
+  { method: 'PATCH', pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs\//, desc: 'update ref' },
+];
+
+/**
+ * Check whether a proxy request is allowed.
+ * Returns { allowed: true } or { allowed: false, reason: string }.
+ */
+function isAllowedProxyRoute(
+  method: string,
+  targetUrl: string
+): { allowed: boolean; reason?: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return { allowed: false, reason: 'Invalid target URL' };
+  }
+
+  const host = parsed.hostname;
+  const path = parsed.pathname;
+
+  // ── github.com: git smart HTTP (clone/pull only) ────────────────
+  if (host === 'github.com') {
+    // Discovery: info/refs (only git-upload-pack, NOT git-receive-pack)
+    if (method === 'GET' && /^\/[^/]+\/[^/]+\.git\/info\/refs$/.test(path)) {
+      const service = parsed.searchParams.get('service');
+      if (service === 'git-upload-pack') {
+        return { allowed: true };
+      }
+      return { allowed: false, reason: `Blocked git service: ${service}` };
+    }
+    // Pack negotiation (clone/fetch — read only)
+    if (method === 'POST' && /^\/[^/]+\/[^/]+\.git\/git-upload-pack$/.test(path)) {
+      return { allowed: true };
+    }
+    // Block everything else on github.com (including git-receive-pack)
+    return { allowed: false, reason: `Blocked: ${method} github.com${path}` };
+  }
+
+  // ── api.github.com: only allowlisted Git Data API routes ────────
+  if (host === 'api.github.com') {
+    for (const route of ALLOWED_API_ROUTES) {
+      if (route.method === method && route.pattern.test(path)) {
+        return { allowed: true };
+      }
+    }
+    return { allowed: false, reason: `Blocked API route: ${method} ${path}` };
+  }
+
+  return { allowed: false, reason: `Blocked host: ${host}` };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Restricted CORS Proxy
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
- * Proxy a request to GitHub, preserving method, headers, and body.
+ * Proxy a request to GitHub. Only allowed routes are forwarded.
  *
- * Supported path formats:
- *   /proxy/<owner>/<repo>.git/...   → https://github.com/<owner>/<repo>.git/...
- *   /proxy/https://api.github.com/... → https://api.github.com/...
- *   /proxy/https://github.com/...     → https://github.com/...
- *
- * Only github.com and api.github.com are allowed as targets.
+ * Path formats:
+ *   /proxy/<owner>/<repo>.git/...       → https://github.com/<owner>/<repo>.git/...
+ *   /proxy/https://api.github.com/...   → https://api.github.com/...
  */
 async function handleProxy(request: Request, url: URL): Promise<Response> {
-  // Strip "/proxy/" prefix to get the target path
   const rawPath = url.pathname.slice('/proxy/'.length);
   if (!rawPath) {
     return jsonResponse({ error: 'Missing path after /proxy/' }, 400);
   }
 
-  // Determine the target URL
+  // Determine target URL
   let targetUrl: string;
   if (rawPath.startsWith('https://')) {
-    // Full URL form: /proxy/https://api.github.com/repos/...
     const parsed = new URL(rawPath + url.search);
     const host = parsed.hostname;
     if (host !== 'github.com' && host !== 'api.github.com') {
-      return jsonResponse({ error: `Proxy only supports github.com and api.github.com, got ${host}` }, 403);
+      return jsonResponse(
+        { error: `Proxy only supports github.com and api.github.com, got ${host}` },
+        403
+      );
     }
     targetUrl = rawPath + url.search;
   } else {
-    // Short form: /proxy/<owner>/<repo>.git/... → github.com
     targetUrl = `https://github.com/${rawPath}${url.search}`;
   }
 
-  // Forward relevant headers, skip host/origin/referer
+  // ── Route allowlist check ───────────────────────────────────────
+  const check = isAllowedProxyRoute(request.method, targetUrl);
+  if (!check.allowed) {
+    return jsonResponse({ error: check.reason }, 403);
+  }
+
+  // Forward relevant headers
   const forwardHeaders = new Headers();
   for (const [key, value] of request.headers.entries()) {
     const lower = key.toLowerCase();
@@ -123,9 +209,8 @@ async function handleProxy(request: Request, url: URL): Promise<Response> {
     forwardHeaders.set(key, value);
   }
 
-  // Always set a User-Agent (GitHub requires it)
   if (!forwardHeaders.has('User-Agent')) {
-    forwardHeaders.set('User-Agent', 'wiki3-ai-sync-proxy/0.1');
+    forwardHeaders.set('User-Agent', 'wiki3-ai-sync-proxy/0.2');
   }
 
   const response = await fetch(targetUrl, {
@@ -137,10 +222,7 @@ async function handleProxy(request: Request, url: URL): Promise<Response> {
     redirect: 'follow',
   });
 
-  // Clone response so we can modify headers
   const responseHeaders = new Headers(response.headers);
-
-  // Remove headers that shouldn't be forwarded back
   responseHeaders.delete('set-cookie');
 
   return new Response(response.body, {
@@ -151,81 +233,86 @@ async function handleProxy(request: Request, url: URL): Promise<Response> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// GitHub OAuth Device Flow
+// GitHub OAuth Web Flow (popup-based)
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
- * Step 1: Request a device code from GitHub.
- * POST /oauth/device
- * Body: { "scope": "public_repo" }   (optional, defaults to "public_repo")
+ * Start the OAuth web flow by redirecting to GitHub.
  *
- * Returns: { device_code, user_code, verification_uri, expires_in, interval }
+ * GET /oauth/authorize?nonce=<nonce>&return_origin=<origin>
+ *
+ * The nonce is echoed back via postMessage so the client can verify
+ * the response came from its own request (prevents CSRF).
  */
-async function handleDeviceCode(request: Request, env: Env): Promise<Response> {
-  if (request.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405);
+function handleOAuthAuthorize(url: URL, env: Env): Response {
+  const nonce = url.searchParams.get('nonce');
+  const returnOrigin = url.searchParams.get('return_origin') || '';
+
+  if (!nonce) {
+    return htmlResponse('<h1>Error</h1><p>Missing nonce parameter.</p>', 400);
   }
   if (!env.GITHUB_CLIENT_ID) {
-    return jsonResponse({ error: 'OAuth not configured (missing GITHUB_CLIENT_ID)' }, 500);
+    return htmlResponse('<h1>Error</h1><p>OAuth not configured on this worker.</p>', 500);
+  }
+  if (!isAllowedOrigin(returnOrigin, env)) {
+    return htmlResponse('<h1>Error</h1><p>Origin not allowed.</p>', 403);
   }
 
-  let scope = 'public_repo';
-  try {
-    const body = await request.json() as Record<string, string>;
-    if (body.scope) scope = body.scope;
-  } catch {
-    // use default scope
-  }
+  // Encode nonce + origin in state (base64 JSON)
+  const state = btoa(JSON.stringify({ nonce, origin: returnOrigin }));
+  const workerOrigin = url.origin;
+  const redirectUri = `${workerOrigin}/oauth/callback`;
 
-  const ghResponse = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
-      scope,
-    }),
-  });
+  const githubUrl = new URL('https://github.com/login/oauth/authorize');
+  githubUrl.searchParams.set('client_id', env.GITHUB_CLIENT_ID);
+  githubUrl.searchParams.set('redirect_uri', redirectUri);
+  githubUrl.searchParams.set('scope', 'public_repo');
+  githubUrl.searchParams.set('state', state);
 
-  const data = await ghResponse.json();
-  return jsonResponse(data, ghResponse.status);
+  return Response.redirect(githubUrl.toString(), 302);
 }
 
 /**
- * Step 2: Poll for the access token.
- * POST /oauth/token
- * Body: { "device_code": "..." }
+ * Handle the OAuth callback from GitHub.
  *
- * Returns: { access_token, token_type, scope } on success,
- *          { error: "authorization_pending" } while waiting,
- *          { error: "..." } on failure.
+ * GET /oauth/callback?code=<code>&state=<state>
+ *
+ * Exchanges the code for a token, then returns an HTML page that
+ * sends the token back to the opener window via postMessage.
  */
-async function handleDeviceToken(request: Request, env: Env): Promise<Response> {
-  if (request.method !== 'POST') {
-    return jsonResponse({ error: 'Method not allowed' }, 405);
-  }
-  if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
-    return jsonResponse(
-      { error: 'OAuth not configured (missing client ID or secret)' },
-      500
+async function handleOAuthCallback(url: URL, env: Env): Promise<Response> {
+  const code = url.searchParams.get('code');
+  const stateParam = url.searchParams.get('state');
+  const error = url.searchParams.get('error');
+
+  // GitHub sends error= if the user denied access
+  if (error) {
+    const desc = url.searchParams.get('error_description') || error;
+    return htmlResponse(
+      `<h1>Authorization Denied</h1><p>${escapeHtml(desc)}</p>
+       <p>You can close this window.</p>`,
+      400
     );
   }
 
-  let deviceCode = '';
+  if (!code || !stateParam) {
+    return htmlResponse('<h1>Error</h1><p>Missing code or state parameter.</p>', 400);
+  }
+
+  // Decode and validate state
+  let state: { nonce: string; origin: string };
   try {
-    const body = await request.json() as Record<string, string>;
-    deviceCode = body.device_code ?? '';
+    state = JSON.parse(atob(stateParam));
   } catch {
-    return jsonResponse({ error: 'Invalid request body' }, 400);
+    return htmlResponse('<h1>Error</h1><p>Invalid state parameter.</p>', 400);
   }
 
-  if (!deviceCode) {
-    return jsonResponse({ error: 'Missing device_code' }, 400);
+  if (!isAllowedOrigin(state.origin, env)) {
+    return htmlResponse('<h1>Error</h1><p>Origin not allowed.</p>', 403);
   }
 
-  const ghResponse = await fetch('https://github.com/login/oauth/access_token', {
+  // Exchange code for access token
+  const tokenResp = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
       'Accept': 'application/json',
@@ -234,13 +321,59 @@ async function handleDeviceToken(request: Request, env: Env): Promise<Response> 
     body: JSON.stringify({
       client_id: env.GITHUB_CLIENT_ID,
       client_secret: env.GITHUB_CLIENT_SECRET,
-      device_code: deviceCode,
-      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      code,
     }),
   });
 
-  const data = await ghResponse.json();
-  return jsonResponse(data, ghResponse.status);
+  const tokenData = await tokenResp.json() as Record<string, string>;
+
+  if (tokenData.error) {
+    return htmlResponse(
+      `<h1>OAuth Error</h1><p>${escapeHtml(tokenData.error_description || tokenData.error)}</p>
+       <p>You can close this window.</p>`,
+      400
+    );
+  }
+
+  // Return HTML that sends the token to the opener via postMessage
+  const html = `<!DOCTYPE html>
+<html><head><title>Wiki3.ai Sync</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+         display: flex; align-items: center; justify-content: center;
+         height: 100vh; margin: 0; background: #f6f8fa; }
+  .card { background: white; padding: 32px; border-radius: 8px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.12); text-align: center; }
+</style></head>
+<body><div class="card">
+  <h2>Logged in!</h2>
+  <p id="status">Sending token to Wiki3.ai Sync&hellip;</p>
+</div>
+<script>
+  (function() {
+    var token = ${JSON.stringify(tokenData.access_token)};
+    var nonce = ${JSON.stringify(state.nonce)};
+    var origin = ${JSON.stringify(state.origin)};
+    if (window.opener) {
+      window.opener.postMessage(
+        { type: 'wiki3-oauth', token: token, nonce: nonce },
+        origin
+      );
+      document.getElementById('status').textContent =
+        'Done! This window will close automatically.';
+      setTimeout(function() { window.close(); }, 800);
+    } else {
+      document.getElementById('status').textContent =
+        'Could not communicate with the parent window. ' +
+        'Please close this tab and try again.';
+    }
+  })();
+</script>
+</body></html>`;
+
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -254,30 +387,41 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+function htmlResponse(body: string, status = 200): Response {
+  const html = `<!DOCTYPE html><html><head><title>Wiki3.ai Sync</title>
+<style>body{font-family:sans-serif;padding:40px;max-width:600px;margin:0 auto;}</style>
+</head><body>${body}</body></html>`;
+  return new Response(html, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Check if an origin is in the ALLOWED_ORIGINS list. */
+function isAllowedOrigin(origin: string, env: Env): boolean {
+  const allowed = env.ALLOWED_ORIGINS ?? '*';
+  if (allowed === '*') return true;
+  return allowed.split(',').map(s => s.trim()).includes(origin);
+}
+
 /**
  * Add CORS headers to a response. Only allows configured origins.
  */
 function corsResponse(response: Response, origin: string, env: Env): Response {
-  const allowed = env.ALLOWED_ORIGINS ?? '*';
-  let allowOrigin = '';
-
-  if (allowed === '*') {
-    allowOrigin = '*';
-  } else {
-    const origins = allowed.split(',').map(s => s.trim());
-    if (origins.includes(origin)) {
-      allowOrigin = origin;
-    }
-  }
-
-  if (!allowOrigin) {
-    // Origin not allowed — return response without CORS headers
+  if (!isAllowedOrigin(origin, env)) {
     return response;
   }
 
+  const allowOrigin = (env.ALLOWED_ORIGINS ?? '*') === '*' ? '*' : origin;
+
   const headers = new Headers(response.headers);
   headers.set('Access-Control-Allow-Origin', allowOrigin);
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
   headers.set(
     'Access-Control-Allow-Headers',
     'Content-Type, Authorization, Accept, X-Requested-With, X-GitHub-Api-Version'

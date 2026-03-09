@@ -3,21 +3,22 @@ main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
 [vars]
+# ── GitHub OAuth App Setup ────────────────────────────────────────────
 # Create an OAuth App at:
 #   https://github.com/organizations/wiki3-ai/settings/applications
-# Name: "Wiki3.ai Sync", enable Device Flow, no callback URL needed.
-# Then set the credentials:
-# GITHUB_CLIENT_ID = "your-oauth-app-client-id"
-# GITHUB_CLIENT_SECRET = "your-oauth-app-client-secret"
-
-# CLOUDFLARE_ACCOUNT_ID="your-account-id-here"
-# export CLOUDFLARE_API_TOKEN="your-token-here"
-
-# PROXY_URL = "https://wiki3-ai-sync-proxy.jim-2ad.workers.dev"
-
-# npx wrangler deploy
-# npx wrangler secret put GITHUB_CLIENT_ID
-# npx wrangler secret put GITHUB_CLIENT_SECRET
+#
+# Settings:
+#   Name: "Wiki3.ai Sync"
+#   Homepage URL: https://wiki3-ai.github.io/jupyterlite-demo/
+#   Callback URL: https://wiki3-ai-sync-proxy.jim-2ad.workers.dev/oauth/callback
+#   Device Flow: not needed (using standard web flow)
+#
+# Then set the credentials as secrets:
+#   npx wrangler secret put GITHUB_CLIENT_ID
+#   npx wrangler secret put GITHUB_CLIENT_SECRET
+#
+# Deploy:
+#   npx wrangler deploy
 
 # Allowed origins (comma-separated). Set to "*" for any, or restrict to your site.
 ALLOWED_ORIGINS = "https://wiki3-ai.github.io"

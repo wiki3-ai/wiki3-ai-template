@@ -19,7 +19,7 @@ import { Dialog, ICommandPalette, showDialog } from '@jupyterlab/apputils';
 import { Widget } from '@lumino/widgets';
 import { deployToGitHub, collectContentsFiles, syncFromRepo, IFileEntry } from './deploy';
 import { getProxyUrl, getDefaultRepoUrl } from './proxy-http';
-import { requestDeviceCode, pollForToken, cacheToken, getCachedToken } from './oauth';
+import { startOAuthPopup, cacheToken, getCachedToken } from './oauth';
 
 /** Command IDs */
 const CMD_DEPLOY = 'deploy:gh-pages';
@@ -38,87 +38,33 @@ function parseAuthor(raw: string): { name: string; email: string } {
 }
 
 /**
- * Perform GitHub OAuth Device Flow login.
- * Shows a dialog with the user code and verification URL,
- * polls for the token, and fills the token input.
+ * Perform GitHub OAuth login via popup.
+ * Opens a popup to the proxy's /oauth/authorize endpoint.
  * Returns the access token on success, or empty string if cancelled/failed.
  */
-async function doOAuthLogin(
-  proxyUrl: string,
-  tokenInput?: HTMLInputElement,
-): Promise<string> {
+async function doOAuthLogin(proxyUrl: string): Promise<string> {
   if (!proxyUrl) {
     await showDialog({
       title: 'OAuth Login',
-      body: 'Please enter a CORS Proxy URL first.',
+      body: 'CORS Proxy URL is not configured.',
       buttons: [Dialog.okButton()],
     });
     return '';
   }
 
   try {
-    const oauthConfig = { proxyUrl };
-    const { device_code, user_code, verification_uri, expires_in, interval } =
-      await requestDeviceCode(oauthConfig);
-
-    const msgNode = document.createElement('div');
-    msgNode.innerHTML = `
-      <p>Go to <a href="${verification_uri}" target="_blank" rel="noopener">
-      ${verification_uri}</a> and enter this code:</p>
-      <pre style="font-size: 1.5em; text-align: center; letter-spacing: 0.15em;
-                  background: var(--jp-layout-color2); padding: 12px; border-radius: 4px;
-                  user-select: all;">${user_code}</pre>
-      <p id="jl-oauth-status" style="font-size: 0.85em; color: var(--jp-ui-font-color2);">
-        Waiting for authorization…</p>
-    `;
-
-    const controller = new AbortController();
-
-    // Show the dialog (non-blocking — user can cancel)
-    const dialogPromise = showDialog({
-      title: 'GitHub Device Login',
-      body: new Widget({ node: msgNode }),
-      buttons: [
-        Dialog.cancelButton({ label: 'Cancel' }),
-      ],
-    });
-
-    // When dialog is dismissed, abort polling
-    dialogPromise.then(() => controller.abort()).catch(() => controller.abort());
-
-    const statusEl = msgNode.querySelector('#jl-oauth-status');
-
-    const result = await pollForToken(
-      oauthConfig,
-      device_code,
-      interval,
-      expires_in,
-      (msg: string) => {
-        if (statusEl) {
-          statusEl.textContent = msg;
-        }
-      },
-      controller.signal,
-    );
-
-    if (result) {
-      cacheToken(result.access_token);
-      if (tokenInput) {
-        tokenInput.value = result.access_token;
-      }
-      if (statusEl) {
-        statusEl.textContent = 'Logged in successfully!';
-      }
-      // Dismiss the dialog after a short delay
-      await new Promise(r => setTimeout(r, 800));
-      Dialog.flush();
-      return result.access_token;
+    const token = await startOAuthPopup(proxyUrl);
+    if (token) {
+      cacheToken(token);
+      return token;
     }
   } catch (err: any) {
-    if (err.name !== 'AbortError') {
+    const msg = err.message || String(err);
+    // Don't show error if the user just closed the popup
+    if (!msg.includes('cancelled') && !msg.includes('closed')) {
       await showDialog({
         title: 'OAuth Error',
-        body: String(err.message || err),
+        body: msg,
         buttons: [Dialog.okButton()],
       });
     }
@@ -128,7 +74,7 @@ async function doOAuthLogin(
 
 /**
  * Ensure we have a valid GitHub token. Returns the cached token or
- * triggers the OAuth Device Flow automatically.
+ * triggers the OAuth web flow (popup) automatically.
  * Returns empty string if the user cancels or an error occurs.
  */
 async function ensureToken(): Promise<string> {

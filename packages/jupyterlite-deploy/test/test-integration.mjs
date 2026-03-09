@@ -5,20 +5,20 @@
  * Tests:
  *   1.  Worker health check & OAuth config
  *   1b. CORS preflight for API proxy (X-GitHub-Api-Version header)
- *   2.  OAuth Device Flow — request device code
- *   3.  OAuth token poll — gets authorization_pending (no human interaction)
- *   4.  Git smart HTTP via proxy (raw fetch)
+ *   2.  OAuth authorize redirect — verifies redirect to GitHub
+ *   3.  Route allowlist — verifies blocked routes return 403
+ *   4.  Git smart HTTP via proxy (raw fetch — allowed route)
  *   5.  MemFS + isomorphic-git clone via proxy (full pipeline)
  *   6.  Sync simulation — clone + file extraction (mock ContentsManager)
- *   7.  [Interactive] OAuth token exchange (requires human)
+ *   7.  [Interactive] Token — uses GITHUB_TOKEN env var
  *   8.  [Interactive] Deploy to test branch (full push pipeline)
  *   9.  [Interactive] Verify deploy — clone back and check files
  *  10.  [Interactive] Cleanup — delete test branch
  *
  * Usage:
- *   node test/test-integration.mjs                          # automated tests
- *   node test/test-integration.mjs --interactive             # include OAuth + deploy
- *   PROXY_URL=https://... node test/test-integration.mjs     # custom worker
+ *   node test/test-integration.mjs                                # automated tests
+ *   GITHUB_TOKEN=ghp_xxx node test/test-integration.mjs --interactive  # push tests
+ *   PROXY_URL=https://... node test/test-integration.mjs          # custom worker
  *
  * Requires: Node.js 18+ (native fetch), built lib/ directory
  */
@@ -57,10 +57,6 @@ function assert(condition, message) {
 function skip(message) {
   console.log(`  SKIP: ${message}`);
   skipped++;
-}
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
 }
 
 /**
@@ -143,58 +139,110 @@ async function testApiProxyPreflight() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 2: OAuth Device Flow — request device code
+// Test 2: OAuth authorize redirect — verifies redirect to GitHub
 // ═══════════════════════════════════════════════════════════════════════
-let deviceCode = '';
-let userCode = '';
 
-async function testDeviceCode() {
-  console.log('\n2. OAuth Device Flow — request device code');
+async function testOAuthAuthorizeRedirect() {
+  console.log('\n2. OAuth authorize redirect');
 
-  const resp = await fetch(`${PROXY_URL}/oauth/device`, {
+  const origin = 'https://wiki3-ai.github.io';
+  const authorizeUrl =
+    `${PROXY_URL}/oauth/authorize?nonce=test-nonce-123&return_origin=${encodeURIComponent(origin)}`;
+
+  // Fetch WITHOUT following redirects to inspect the 302
+  const resp = await fetch(authorizeUrl, { redirect: 'manual' });
+  assert(
+    resp.status === 302 || resp.status === 301 || resp.status === 308,
+    `Returns redirect status (got ${resp.status})`
+  );
+
+  const location = resp.headers.get('location') || '';
+  assert(
+    location.includes('github.com/login/oauth/authorize'),
+    `Redirects to GitHub OAuth (${location.slice(0, 60)}…)`
+  );
+  assert(
+    location.includes('scope=public_repo'),
+    `Scope is public_repo`
+  );
+  assert(
+    location.includes('redirect_uri='),
+    `Has redirect_uri (callback URL)`
+  );
+  assert(
+    location.includes('state='),
+    `Has state parameter (nonce + origin)`
+  );
+
+  // Verify the state decodes correctly
+  const stateMatch = location.match(/state=([^&]+)/);
+  if (stateMatch) {
+    try {
+      const decoded = JSON.parse(atob(decodeURIComponent(stateMatch[1])));
+      assert(decoded.nonce === 'test-nonce-123', `State contains correct nonce`);
+      assert(decoded.origin === origin, `State contains correct origin`);
+    } catch {
+      assert(false, 'State parameter is valid base64 JSON');
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test 3: Route allowlist — blocked routes return 403
+// ═══════════════════════════════════════════════════════════════════════
+async function testBlockedRoutes() {
+  console.log('\n3. Route allowlist — blocked routes');
+
+  const blockedRoutes = [
+    {
+      label: 'git-receive-pack (push via git protocol)',
+      url: `${PROXY_URL}/proxy/${REPO_OWNER}/${REPO_NAME}.git/info/refs?service=git-receive-pack`,
+      method: 'GET',
+    },
+    {
+      label: 'DELETE refs (branch deletion)',
+      url: `${PROXY_URL}/proxy/https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/git/refs/heads/gh-pages`,
+      method: 'DELETE',
+    },
+    {
+      label: 'GET repo admin API',
+      url: `${PROXY_URL}/proxy/https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`,
+      method: 'GET',
+    },
+    {
+      label: 'GET /user (user info)',
+      url: `${PROXY_URL}/proxy/https://api.github.com/user`,
+      method: 'GET',
+    },
+    {
+      label: 'Non-GitHub host',
+      url: `${PROXY_URL}/proxy/https://evil.com/steal-tokens`,
+      method: 'GET',
+    },
+  ];
+
+  for (const route of blockedRoutes) {
+    const resp = await fetch(route.url, {
+      method: route.method,
+      headers: { 'Origin': 'https://wiki3-ai.github.io' },
+    });
+    assert(resp.status === 403, `${route.label} → 403 (got ${resp.status})`);
+  }
+
+  // Also verify that device flow endpoints no longer exist
+  const deviceResp = await fetch(`${PROXY_URL}/oauth/device`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ scope: 'public_repo' }),
   });
-  assert(resp.ok, `POST /oauth/device returns 200 (got ${resp.status})`);
+  assert(deviceResp.status === 404, `POST /oauth/device → 404 (removed) (got ${deviceResp.status})`);
 
-  const data = await resp.json();
-  assert(typeof data.device_code === 'string' && data.device_code.length > 0,
-    `Got device_code (${data.device_code?.slice(0, 8)}…)`);
-  assert(typeof data.user_code === 'string' && data.user_code.length > 0,
-    `Got user_code (${data.user_code})`);
-  assert(data.verification_uri?.includes('github.com'),
-    `verification_uri points to GitHub (${data.verification_uri})`);
-  assert(typeof data.expires_in === 'number' && data.expires_in > 0,
-    `expires_in is positive (${data.expires_in}s)`);
-  assert(typeof data.interval === 'number' && data.interval > 0,
-    `interval is positive (${data.interval}s)`);
-
-  deviceCode = data.device_code;
-  userCode = data.user_code;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Test 3: OAuth token poll — authorization_pending
-// ═══════════════════════════════════════════════════════════════════════
-async function testTokenPollPending() {
-  console.log('\n3. OAuth token poll — authorization_pending');
-
-  if (!deviceCode) {
-    skip('No device_code from test 2');
-    return;
-  }
-
-  const resp = await fetch(`${PROXY_URL}/oauth/token`, {
+  const tokenResp = await fetch(`${PROXY_URL}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ device_code: deviceCode }),
+    body: JSON.stringify({ device_code: 'test' }),
   });
-  assert(resp.ok || resp.status < 500, `POST /oauth/token doesn't 500 (got ${resp.status})`);
-
-  const data = await resp.json();
-  assert(data.error === 'authorization_pending',
-    `Returns authorization_pending (got ${data.error})`);
+  assert(tokenResp.status === 404, `POST /oauth/token → 404 (removed) (got ${tokenResp.status})`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -360,75 +408,46 @@ async function testSyncSimulation() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 7: [Interactive] Full OAuth token exchange
+// Test 7: [Interactive] Token acquisition via GITHUB_TOKEN env var
 // ═══════════════════════════════════════════════════════════════════════
 async function testInteractiveOAuth() {
-  console.log('\n7. [Interactive] Full OAuth token exchange');
+  console.log('\n7. [Interactive] Token acquisition');
 
   if (!INTERACTIVE) {
-    skip('Run with --interactive to test full OAuth flow');
+    skip('Run with --interactive to test full push flow');
     return;
   }
 
-  // Request a fresh device code
-  const resp = await fetch(`${PROXY_URL}/oauth/device`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'public_repo' }),
+  // With the web OAuth flow, CLI testing uses a token from the environment
+  oauthToken = process.env.GITHUB_TOKEN || null;
+
+  if (!oauthToken) {
+    console.log('');
+    console.log('  ┌─────────────────────────────────────────────────┐');
+    console.log('  │  Set GITHUB_TOKEN env var to run push tests.    │');
+    console.log('  │                                                 │');
+    console.log('  │  Create a PAT at:                               │');
+    console.log('  │  https://github.com/settings/tokens/new         │');
+    console.log('  │  Scope: public_repo                             │');
+    console.log('  │                                                 │');
+    console.log('  │  Usage:                                         │');
+    console.log('  │  GITHUB_TOKEN=ghp_xxx node test --interactive   │');
+    console.log('  └─────────────────────────────────────────────────┘');
+    console.log('');
+    skip('GITHUB_TOKEN not set');
+    return;
+  }
+
+  // Verify token works: fetch user info (directly, not through proxy)
+  const userResp = await fetch('https://api.github.com/user', {
+    headers: { 'Authorization': `Bearer ${oauthToken}` },
   });
-  const codeData = await resp.json();
-
-  console.log(`\n  ┌─────────────────────────────────────────────┐`);
-  console.log(`  │  Go to: ${codeData.verification_uri}`);
-  console.log(`  │  Enter code: ${codeData.user_code}`);
-  console.log(`  │  Waiting for authorization (${codeData.expires_in}s timeout)…`);
-  console.log(`  └─────────────────────────────────────────────┘\n`);
-
-  const deadline = Date.now() + codeData.expires_in * 1000;
-  let pollInterval = Math.max(codeData.interval, 5) * 1000;
-
-  while (Date.now() < deadline) {
-    await sleep(pollInterval);
-
-    const tokenResp = await fetch(`${PROXY_URL}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_code: codeData.device_code }),
-    });
-    const tokenData = await tokenResp.json();
-
-    if (tokenData.access_token) {
-      oauthToken = tokenData.access_token;
-      break;
-    }
-
-    if (tokenData.error === 'slow_down') {
-      pollInterval += 5000;
-      process.stdout.write('  (slowing down) ');
-    } else if (tokenData.error === 'authorization_pending') {
-      process.stdout.write('.');
-    } else {
-      console.error(`\n  Unexpected OAuth error: ${tokenData.error}`);
-      break;
-    }
-  }
-
-  console.log('');
-
-  if (oauthToken) {
-    assert(true, `Got access token (${oauthToken.slice(0, 8)}…)`);
-    assert(oauthToken.startsWith('gho_') || oauthToken.startsWith('ghp_') || oauthToken.length > 10,
-      `Token looks like a GitHub token`);
-
-    // Verify token works: fetch user info
-    const userResp = await fetch('https://api.github.com/user', {
-      headers: { 'Authorization': `Bearer ${oauthToken}` },
-    });
-    const userData = await userResp.json();
-    assert(userResp.ok, `Token is valid (user: ${userData.login})`);
-  } else {
-    assert(false, 'Did not receive access token (timed out or denied)');
-  }
+  const userData = await userResp.json();
+  assert(userResp.ok, `Token is valid (user: ${userData.login})`);
+  assert(
+    oauthToken.startsWith('gho_') || oauthToken.startsWith('ghp_') || oauthToken.length > 10,
+    `Token looks like a GitHub token`
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -696,8 +715,8 @@ async function main() {
 
   await testHealthCheck();
   await testApiProxyPreflight();
-  await testDeviceCode();
-  await testTokenPollPending();
+  await testOAuthAuthorizeRedirect();
+  await testBlockedRoutes();
   await testGitProxy();
   await testCloneViaProxy();
   await testSyncSimulation();

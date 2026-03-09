@@ -1,130 +1,93 @@
 /**
- * GitHub OAuth Device Flow for browser-based authentication.
+ * GitHub OAuth Web Flow for browser-based authentication.
  *
- * The Device Flow doesn't require redirects, making it ideal for
- * static sites like JupyterLite on GitHub Pages.
+ * Uses the standard OAuth authorization code flow via a popup window:
+ *   1. Extension opens popup → proxy /oauth/authorize → GitHub authorize page
+ *   2. User clicks "Authorize" on GitHub
+ *   3. GitHub redirects to proxy /oauth/callback with auth code
+ *   4. Proxy exchanges code for token, sends it back via postMessage
+ *   5. Extension receives token in the message listener
  *
- * Flow:
- *   1. POST /oauth/device → get user_code + verification_uri
- *   2. User opens verification_uri, enters user_code
- *   3. Poll POST /oauth/token until access_token is returned
- *
- * The proxy worker handles communication with GitHub's OAuth endpoints
- * (which also have CORS restrictions).
+ * Security:
+ *   - postMessage is scoped to the allowed origin (prevents leakage)
+ *   - nonce ties the response to the request (prevents CSRF)
+ *   - Token exchange happens server-side (client_secret never exposed)
  */
-
-export interface IOAuthConfig {
-  /** Base URL of the CORS proxy worker */
-  proxyUrl: string;
-  /** Requested OAuth scope (default: "public_repo") */
-  scope?: string;
-}
-
-export interface IDeviceCodeResponse {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
-
-export interface IOAuthResult {
-  access_token: string;
-  token_type: string;
-  scope: string;
-}
 
 /**
- * Start the Device Flow: request a device code from the proxy.
+ * Start the OAuth web flow in a popup window.
+ *
+ * Opens a popup to the proxy's /oauth/authorize endpoint, which redirects
+ * to GitHub. After the user authorizes, the popup sends the token back
+ * via postMessage and closes automatically.
+ *
+ * @param proxyUrl - Base URL of the CORS proxy worker
+ * @returns The access token, or rejects if cancelled/blocked/failed
  */
-export async function requestDeviceCode(
-  config: IOAuthConfig
-): Promise<IDeviceCodeResponse> {
-  const resp = await fetch(`${config.proxyUrl}/oauth/device`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: config.scope ?? 'public_repo' }),
+export function startOAuthPopup(proxyUrl: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    // Generate a nonce to tie request → response
+    const nonce = generateNonce();
+    const origin = window.location.origin;
+
+    const authUrl =
+      `${proxyUrl}/oauth/authorize` +
+      `?nonce=${encodeURIComponent(nonce)}` +
+      `&return_origin=${encodeURIComponent(origin)}`;
+
+    // Open popup immediately (preserves user-gesture for popup blockers)
+    const popup = window.open(
+      authUrl,
+      'wiki3-oauth',
+      'width=600,height=700,popup=yes'
+    );
+
+    if (!popup) {
+      reject(
+        new Error(
+          'Popup blocked by the browser. Please allow popups for this site and try again.'
+        )
+      );
+      return;
+    }
+
+    let settled = false;
+
+    // Listen for the token via postMessage from the callback page
+    const onMessage = (event: MessageEvent) => {
+      // Verify the message comes from the proxy worker
+      const proxyOrigin = new URL(proxyUrl).origin;
+      if (event.origin !== proxyOrigin) return;
+      if (event.data?.type !== 'wiki3-oauth') return;
+      if (event.data?.nonce !== nonce) return;
+
+      cleanup();
+
+      if (event.data.token) {
+        settled = true;
+        resolve(event.data.token);
+      } else {
+        settled = true;
+        reject(new Error('OAuth flow did not return a token.'));
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+
+    // Watch for the popup being closed without completing auth
+    const checkClosed = setInterval(() => {
+      if (popup.closed && !settled) {
+        cleanup();
+        settled = true;
+        reject(new Error('Login cancelled (popup closed).'));
+      }
+    }, 500);
+
+    function cleanup() {
+      window.removeEventListener('message', onMessage);
+      clearInterval(checkClosed);
+    }
   });
-
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Device code request failed (${resp.status}): ${body}`);
-  }
-
-  return resp.json();
-}
-
-/**
- * Poll for the access token. Returns when the user authorizes,
- * or throws on timeout/error.
- *
- * @param config - OAuth config
- * @param deviceCode - The device_code from requestDeviceCode
- * @param interval - Polling interval in seconds (from the device code response)
- * @param expiresIn - Expiration in seconds (from the device code response)
- * @param onProgress - Optional callback for status updates
- * @param signal - Optional AbortSignal to cancel polling
- */
-export async function pollForToken(
-  config: IOAuthConfig,
-  deviceCode: string,
-  interval: number,
-  expiresIn: number,
-  onProgress?: (msg: string) => void,
-  signal?: AbortSignal
-): Promise<IOAuthResult> {
-  const deadline = Date.now() + expiresIn * 1000;
-  let pollInterval = Math.max(interval, 5) * 1000; // at least 5s
-
-  while (Date.now() < deadline) {
-    if (signal?.aborted) {
-      throw new Error('OAuth flow cancelled');
-    }
-
-    await sleep(pollInterval);
-
-    const resp = await fetch(`${config.proxyUrl}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_code: deviceCode }),
-    });
-
-    const data = await resp.json() as Record<string, string>;
-
-    if (data.access_token) {
-      return data as unknown as IOAuthResult;
-    }
-
-    if (data.error === 'authorization_pending') {
-      onProgress?.('Waiting for authorization…');
-      continue;
-    }
-
-    if (data.error === 'slow_down') {
-      // GitHub asked us to slow down — add 5s
-      pollInterval += 5000;
-      onProgress?.('Slowing down polling…');
-      continue;
-    }
-
-    if (data.error === 'expired_token') {
-      throw new Error('Device code expired. Please try again.');
-    }
-
-    if (data.error === 'access_denied') {
-      throw new Error('Authorization was denied by the user.');
-    }
-
-    if (data.error) {
-      throw new Error(`OAuth error: ${data.error} — ${data.error_description ?? ''}`);
-    }
-  }
-
-  throw new Error('Device code expired (timeout). Please try again.');
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -144,4 +107,15 @@ export function cacheToken(token: string): void {
   if (typeof sessionStorage !== 'undefined') {
     sessionStorage.setItem('jl-deploy-token', token);
   }
+}
+
+/** Generate a random nonce string for CSRF protection. */
+function generateNonce(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback for older browsers
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
 }
