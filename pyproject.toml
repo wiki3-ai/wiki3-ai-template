@@ -48,6 +48,7 @@ dependencies = [
 
     # Deploy extension (isomorphic-git in-browser push to gh-pages)
     "jupyterlite-deploy @ file:packages/jupyterlite-deploy",
+    "jupyterlite_wiki_addon @ file:packages/jupyterlite_wiki_addon"
 ]
 
 [build-system]

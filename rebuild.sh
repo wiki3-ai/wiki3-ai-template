@@ -25,12 +25,13 @@ node test/test-memfs.mjs
 cd ../..
 
 echo "=== Reinstall Python packages ==="
-pip uninstall -y jupyterlite-deploy jupyterlite-demo 2>/dev/null || true
+pip uninstall -y jupyterlite-deploy jupyterlite-wiki-addon jupyterlite-demo 2>/dev/null || true
 # Ensure build deps are available (needed for --no-build-isolation)
 pip install hatchling hatch-jupyter-builder hatch-nodejs-version editables 2>/dev/null
 # Use --no-build-isolation so pip uses our pre-built labextension
 # instead of rebuilding JS in a clean isolated env
 pip install --no-build-isolation -e packages/jupyterlite-deploy
+pip install -e packages/jupyterlite_wiki_addon
 pip install --no-deps -e .
 
 echo "=== Verify deploy:sync in installed extension ==="
@@ -49,6 +50,15 @@ if grep -rq "deploy:sync" _output/; then
   echo "  ✓ deploy:sync found in _output"
 else
   echo "  ✗ deploy:sync NOT found in _output — something is wrong"
+  exit 1
+fi
+
+echo "=== Verify wiki pages in _output ==="
+if [ -d "_output/wiki" ] && ls _output/wiki/*.html >/dev/null 2>&1; then
+  echo "  ✓ wiki pages found in _output/wiki"
+  ls _output/wiki/*.html | head -5
+else
+  echo "  ✗ wiki pages NOT found — wiki addon may not be working"
   exit 1
 fi
 
