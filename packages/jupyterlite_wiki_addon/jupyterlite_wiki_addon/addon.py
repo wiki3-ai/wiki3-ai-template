@@ -139,6 +139,7 @@ class WikiPageAddon(BaseAddon):
         rel_path = notebook_path.relative_to(files_dir)
         static_output = output_file.relative_to(output_dir)
         rel_path_url = quote(rel_path.as_posix(), safe='/')
+        relative_root = Path(os.path.relpath(output_dir, output_file.parent))
         
         # Build breadcrumbs for nested notebooks
         breadcrumbs = []
@@ -195,7 +196,7 @@ class WikiPageAddon(BaseAddon):
                     },
                 ],
             },
-            "wiki_behavior_script_url": "/static/wiki_behavior.js",
+            "wiki_behavior_script_url": (relative_root / "static" / "wiki_behavior.js").as_posix(),
         }
 
         body, _ = html_exporter.from_notebook_node(nb, resources=resources)
@@ -309,7 +310,7 @@ class WikiPageAddon(BaseAddon):
             subdirs=subdirs,
             breadcrumbs=breadcrumbs,
             wiki_root=wiki_root,
-            behavior_script_url="/static/wiki_behavior.js",
+            behavior_script_url=(relative_root / "static" / "wiki_behavior.js").as_posix(),
         )
 
         index_file = index_location / "index.html"
