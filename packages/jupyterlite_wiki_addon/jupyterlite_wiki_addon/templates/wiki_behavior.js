@@ -48,15 +48,11 @@
 
   const currentPath = window.location.pathname;
 
-  // Determine nav.json URL relative to this page
-  // Pages live in /wiki/ or /wiki/subdir/ — nav.json is at /wiki/nav.json
-  const navJsonUrl = (() => {
-    const wikiIdx = currentPath.indexOf('/wiki/');
-    if (wikiIdx !== -1) {
-      return currentPath.substring(0, wikiIdx) + '/wiki/nav.json';
-    }
-    return '/wiki/nav.json';
-  })();
+  // Detect the base path prefix (everything before /wiki/)
+  // e.g. "" for root-hosted, "/wiki3-ai-template" for subpath-hosted
+  const wikiIdx = currentPath.indexOf('/wiki/');
+  const basePath = wikiIdx !== -1 ? currentPath.substring(0, wikiIdx) : '';
+  const navJsonUrl = basePath + '/wiki/nav.json';
 
   function renderNav(tree, depth) {
     depth = depth || 0;
@@ -68,9 +64,10 @@
       html += '<ul class="' + cls + '">';
       for (let i = 0; i < tree.pages.length; i++) {
         const p = tree.pages[i];
-        const isActive = currentPath === p.href || currentPath === p.href.replace(/\.html$/, '/');
+        const fullHref = basePath + p.href;
+        const isActive = currentPath === fullHref || currentPath === fullHref.replace(/\.html$/, '/');
         html += '<li class="wiki-nav-item' + (isActive ? ' active' : '') + '">';
-        html += '<a href="' + p.href + '">' + escHtml(p.title) + '</a></li>';
+        html += '<a href="' + fullHref + '">' + escHtml(p.title) + '</a></li>';
       }
       html += '</ul>';
     }
@@ -79,12 +76,13 @@
     if (tree.dirs && tree.dirs.length) {
       for (let i = 0; i < tree.dirs.length; i++) {
         const d = tree.dirs[i];
+        const fullHref = basePath + d.href;
         // auto-expand if current page is inside this directory
-        const isInside = currentPath.indexOf(d.href.replace(/index\.html$/, '')) === 0;
+        const isInside = currentPath.indexOf(fullHref.replace(/index\.html$/, '')) === 0;
         html += '<div class="wiki-nav-section">';
         html += '<div class="wiki-nav-folder-header" data-wiki-toggle>';
         html += '<span class="wiki-nav-arrow' + (isInside ? ' open' : '') + '">&#9654;</span>';
-        html += '<a href="' + d.href + '" style="color:inherit;text-decoration:none">' + escHtml(d.name) + '</a>';
+        html += '<a href="' + fullHref + '" style="color:inherit;text-decoration:none">' + escHtml(d.name) + '</a>';
         html += '</div>';
         html += '<div class="wiki-nav-items' + (isInside ? '' : ' collapsed') + '">';
         html += renderNav(d, depth + 1);
@@ -102,7 +100,7 @@
     .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
     .then(function(tree) {
       let html = '<div style="padding:0.5rem 0.75rem;font-weight:600;font-size:14px">';
-      html += '<a href="/wiki/index.html" style="color:inherit;text-decoration:none">Wiki</a></div>';
+      html += '<a href="' + basePath + '/wiki/index.html" style="color:inherit;text-decoration:none">Wiki</a></div>';
       html += renderNav(tree, 0);
       sidebar.innerHTML = html;
     })
