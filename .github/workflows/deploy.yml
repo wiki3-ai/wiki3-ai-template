@@ -1,0 +1,93 @@
+name: Build and Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - wiki
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install hatchling hatch-jupyter-builder hatch-nodejs-version editables
+          pip install -e .
+
+      - name: Build deploy extension (JS)
+        working-directory: packages/jupyterlite-deploy
+        run: |
+          jlpm install
+          jlpm build:prod
+
+      - name: Install deploy extension
+        run: pip install --no-build-isolation -e packages/jupyterlite-deploy
+
+      - name: Install wiki addon
+        run: pip install -e packages/jupyterlite_wiki_addon
+
+      - name: Run integration tests
+        working-directory: packages/jupyterlite-deploy
+        run: node test/test-memfs.mjs
+
+      - name: Build JupyterLite site
+        run: jupyter lite build --force
+
+      - name: Verify build output
+        run: |
+          grep -rq "deploy:sync" _output/ \
+            && echo "✓ deploy:sync present" \
+            || { echo "✗ deploy:sync missing"; exit 1; }
+          ls _output/wiki/*.html >/dev/null 2>&1 \
+            && echo "✓ wiki pages present" \
+            || { echo "✗ wiki pages missing"; exit 1; }
+          test -f _output/wiki/nav.json \
+            && echo "✓ nav.json present" \
+            || { echo "✗ nav.json missing"; exit 1; }
+
+      - name: Bundle wiki-render infrastructure
+        run: |
+          mkdir -p _output/.github/workflows _output/.wiki-build/templates/wiki
+          cp .github/workflows/wiki-render.yml \
+             _output/.github/workflows/
+          cp scripts/render-wiki.py \
+             _output/.wiki-build/render.py
+          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/index.html.j2 \
+             _output/.wiki-build/templates/wiki/
+          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/conf.json \
+             _output/.wiki-build/templates/wiki/
+          cp packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki_index.html.j2 \
+             _output/.wiki-build/templates/
+          touch _output/.nojekyll
+
+      - name: Deploy to gh-pages
+        run: |
+          cd _output
+          git init
+          git checkout --orphan gh-pages
+          git add -A
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Deploy JupyterLite site"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push --force origin gh-pages

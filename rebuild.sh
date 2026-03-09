@@ -63,4 +63,5 @@ else
 fi
 
 echo "=== Done ==="
-echo "Run ./deploy.sh to push to gh-pages."
+echo "Push to main or wiki branch to trigger GitHub Actions deploy."
+echo "Or run ./deploy.sh to push to gh-pages manually."

@@ -30,6 +30,18 @@ cp -a "$OLDPWD/$OUTPUT_DIR/." .
 # Add .nojekyll so GitHub Pages serves files as-is
 touch .nojekyll
 
+# Include wiki render infrastructure so the wiki-render workflow can
+# re-render pages when notebooks are pushed to gh-pages.
+mkdir -p .github/workflows .wiki-build/templates/wiki
+cp "$OLDPWD/.github/workflows/wiki-render.yml" .github/workflows/
+cp "$OLDPWD/scripts/render-wiki.py"             .wiki-build/render.py
+cp "$OLDPWD/packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/index.html.j2" \
+   .wiki-build/templates/wiki/
+cp "$OLDPWD/packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki/conf.json" \
+   .wiki-build/templates/wiki/
+cp "$OLDPWD/packages/jupyterlite_wiki_addon/jupyterlite_wiki_addon/templates/wiki_index.html.j2" \
+   .wiki-build/templates/
+
 # Commit everything
 git add -A
 git commit -m "$MESSAGE"

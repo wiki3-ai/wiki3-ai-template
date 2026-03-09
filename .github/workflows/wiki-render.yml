@@ -1,0 +1,58 @@
+name: Re-render wiki pages
+
+# Triggers when the deploy extension (or deploy.sh) pushes notebook
+# changes to the gh-pages branch.  Re-renders wiki HTML and commits
+# the result back to gh-pages.
+#
+# NOTE: For this workflow to fire, the YAML file must exist on the
+#       gh-pages branch itself.  deploy.sh copies it there automatically.
+
+on:
+  push:
+    branches: [gh-pages]
+    paths:
+      - "files/**"          # only when notebooks change
+
+# Prevent the workflow from re-triggering itself when it commits
+# updated wiki HTML back to gh-pages (those commits only touch wiki/).
+# Belt-and-suspenders: also check the actor.
+concurrency:
+  group: wiki-render
+  cancel-in-progress: true
+
+permissions:
+  contents: write            # push back to gh-pages
+
+jobs:
+  render:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install rendering dependencies
+        run: pip install nbconvert nbformat jinja2
+
+      - name: Render wiki pages
+        run: python .wiki-build/render.py
+
+      - name: Commit updated wiki pages
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wiki/
+          if git diff --cached --quiet; then
+            echo "No wiki changes to commit."
+          else
+            git commit -m "Auto-render wiki pages [skip ci]"
+            git push
+          fi

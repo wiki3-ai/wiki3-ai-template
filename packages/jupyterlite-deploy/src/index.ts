@@ -2,7 +2,7 @@
  * jupyterlite-deploy — JupyterLab/JupyterLite extension
  *
  * Adds a "Push to GitHub Pages" command that uses isomorphic-git
- * to push content files to a gh-pages branch.
+ * to push content files to a git branch.
  */
 
 // Polyfill Buffer for isomorphic-git (webpack 5 doesn't auto-polyfill Node globals)
@@ -107,8 +107,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
     console.log('jupyterlite-deploy: activated');
 
     app.commands.addCommand(CMD_DEPLOY, {
-      label: 'Wiki3.ai Sync: Push to GitHub Pages',
-      caption: 'Push content files to a gh-pages branch',
+      label: 'Wiki3.ai Sync: Push to GitHub',
+      caption: 'Push content files to the main branch',
       execute: async () => {
         // ── 1. Ensure we have a token (auto-login if needed) ─────
         const token = await ensureToken();
@@ -126,7 +126,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
           <label for="jl-deploy-branch">Branch</label>
           <input id="jl-deploy-branch" type="text"
-                 value="${localStorage.getItem('jl-deploy-branch') || 'gh-pages'}" />
+                 value="${localStorage.getItem('jl-deploy-branch') || 'main'}" />
 
           <label for="jl-deploy-message">Commit message</label>
           <input id="jl-deploy-message" type="text"
@@ -134,7 +134,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         `;
 
         const dialogResult = await showDialog({
-          title: 'Push to GitHub Pages',
+          title: 'Push to GitHub',
           body: new Widget({ node: body }),
           buttons: [
             Dialog.cancelButton(),
@@ -149,7 +149,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         ).value.trim();
         const branch = (
           body.querySelector('#jl-deploy-branch') as HTMLInputElement
-        ).value.trim() || 'gh-pages';
+        ).value.trim() || 'main';
         const message = (
           body.querySelector('#jl-deploy-message') as HTMLInputElement
         ).value.trim() || 'Update content files';
@@ -250,7 +250,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
           <label for="jl-sync-branch">Branch</label>
           <input id="jl-sync-branch" type="text"
-                 value="${localStorage.getItem('jl-sync-branch') || 'gh-pages'}" />
+                 value="${localStorage.getItem('jl-sync-branch') || 'main'}" />
 
           <label for="jl-sync-path">Content subdirectory</label>
           <input id="jl-sync-path" type="text"
@@ -279,7 +279,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
         ).value.trim();
         const branch = (
           syncBody.querySelector('#jl-sync-branch') as HTMLInputElement
-        ).value.trim() || 'gh-pages';
+        ).value.trim() || 'main';
         const contentPath = (
           syncBody.querySelector('#jl-sync-path') as HTMLInputElement
         ).value.trim();
