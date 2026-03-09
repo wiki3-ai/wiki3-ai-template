@@ -3,16 +3,17 @@
  * Integration tests for the full sync + deploy pipeline via the live CORS proxy.
  *
  * Tests:
- *   1. Worker health check & OAuth config
- *   2. OAuth Device Flow — request device code
- *   3. OAuth token poll — gets authorization_pending (no human interaction)
- *   4. Git smart HTTP via proxy (raw fetch)
- *   5. MemFS + isomorphic-git clone via proxy (full pipeline)
- *   6. Sync simulation — clone + file extraction (mock ContentsManager)
- *   7. [Interactive] OAuth token exchange (requires human)
- *   8. [Interactive] Deploy to test branch (full push pipeline)
- *   9. [Interactive] Verify deploy — clone back and check files
- *  10. [Interactive] Cleanup — delete test branch
+ *   1.  Worker health check & OAuth config
+ *   1b. CORS preflight for API proxy (X-GitHub-Api-Version header)
+ *   2.  OAuth Device Flow — request device code
+ *   3.  OAuth token poll — gets authorization_pending (no human interaction)
+ *   4.  Git smart HTTP via proxy (raw fetch)
+ *   5.  MemFS + isomorphic-git clone via proxy (full pipeline)
+ *   6.  Sync simulation — clone + file extraction (mock ContentsManager)
+ *   7.  [Interactive] OAuth token exchange (requires human)
+ *   8.  [Interactive] Deploy to test branch (full push pipeline)
+ *   9.  [Interactive] Verify deploy — clone back and check files
+ *  10.  [Interactive] Cleanup — delete test branch
  *
  * Usage:
  *   node test/test-integration.mjs                          # automated tests
@@ -99,6 +100,45 @@ async function testHealthCheck() {
   assert(
     acao === 'https://wiki3-ai.github.io' || acao === '*',
     `CORS header present (${acao})`
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test 1b: CORS preflight for API proxy
+// ═══════════════════════════════════════════════════════════════════════
+async function testApiProxyPreflight() {
+  console.log('\n1b. CORS preflight for API proxy');
+
+  // Simulate a browser preflight for the Git Data API requests
+  // that include X-GitHub-Api-Version
+  const preflightUrl = `${PROXY_URL}/proxy/https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/git/ref/heads/${BRANCH}`;
+  const resp = await fetch(preflightUrl, {
+    method: 'OPTIONS',
+    headers: {
+      'Origin': 'https://wiki3-ai.github.io',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'Authorization,X-GitHub-Api-Version,Accept,Content-Type',
+    },
+  });
+
+  assert(resp.status === 204, `OPTIONS returns 204 (got ${resp.status})`);
+
+  const allowHeaders = resp.headers.get('access-control-allow-headers') || '';
+  assert(
+    allowHeaders.toLowerCase().includes('x-github-api-version'),
+    `Allow-Headers includes X-GitHub-Api-Version (${allowHeaders})`
+  );
+
+  const allowMethods = resp.headers.get('access-control-allow-methods') || '';
+  assert(
+    allowMethods.includes('PATCH'),
+    `Allow-Methods includes PATCH (${allowMethods})`
+  );
+
+  const acao = resp.headers.get('access-control-allow-origin');
+  assert(
+    acao === 'https://wiki3-ai.github.io' || acao === '*',
+    `CORS origin correct (${acao})`
   );
 }
 
@@ -655,6 +695,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════════');
 
   await testHealthCheck();
+  await testApiProxyPreflight();
   await testDeviceCode();
   await testTokenPollPending();
   await testGitProxy();

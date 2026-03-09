@@ -18,86 +18,13 @@ import {
 import { Dialog, ICommandPalette, showDialog } from '@jupyterlab/apputils';
 import { Widget } from '@lumino/widgets';
 import { deployToGitHub, collectContentsFiles, syncFromRepo, IFileEntry } from './deploy';
-import { getProxyUrl } from './proxy-http';
-import { requestDeviceCode, pollForToken, cacheToken } from './oauth';
+import { getProxyUrl, getDefaultRepoUrl } from './proxy-http';
+import { requestDeviceCode, pollForToken, cacheToken, getCachedToken } from './oauth';
 
 /** Command IDs */
 const CMD_DEPLOY = 'deploy:gh-pages';
 const CMD_SYNC = 'deploy:sync';
 const CMD_LOGIN = 'deploy:login';
-
-/**
- * Build the deploy configuration dialog body.
- */
-function createDeployDialogBody(): HTMLElement {
-  const body = document.createElement('div');
-  body.classList.add('jl-deploy-dialog');
-  body.innerHTML = `
-    <label for="jl-deploy-proxy">CORS Proxy URL</label>
-    <input id="jl-deploy-proxy" type="text"
-           placeholder="https://your-worker.workers.dev"
-           value="${localStorage.getItem('jl-deploy-proxy') ?? ''}" />
-
-    <label for="jl-deploy-repo">Repository URL</label>
-    <input id="jl-deploy-repo" type="text"
-           placeholder="https://github.com/user/repo.git"
-           value="${localStorage.getItem('jl-deploy-repo') ?? ''}" />
-
-    <label for="jl-deploy-branch">Branch</label>
-    <input id="jl-deploy-branch" type="text"
-           value="${localStorage.getItem('jl-deploy-branch') || 'gh-pages'}" />
-
-    <label for="jl-deploy-token">GitHub Token</label>
-    <div style="display: flex; gap: 4px; align-items: center;">
-      <input id="jl-deploy-token" type="password" style="flex: 1;"
-             placeholder="ghp_… or use Login button"
-             value="${sessionStorage.getItem('jl-deploy-token') ?? ''}" />
-      <button id="jl-deploy-oauth-btn" type="button"
-              style="white-space: nowrap; padding: 2px 8px;">Login with GitHub</button>
-      <button id="jl-deploy-clear-token" type="button"
-              style="white-space: nowrap; padding: 2px 8px;">Clear</button>
-    </div>
-    <div style="margin-top: 4px;">
-      <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer;">
-        <input id="jl-deploy-remember-token" type="checkbox"
-               ${sessionStorage.getItem('jl-deploy-token') ? 'checked' : ''} />
-        Remember token for this session
-      </label>
-    </div>
-
-    <label for="jl-deploy-author">Author</label>
-    <input id="jl-deploy-author" type="text"
-           placeholder="Wiki3 Bot <deploy@wiki3.ai>"
-           value="${localStorage.getItem('jl-deploy-author') || 'Wiki3 Bot <deploy@wiki3.ai>'}" />
-
-    <label for="jl-deploy-message">Commit message</label>
-    <input id="jl-deploy-message" type="text"
-           value="Update content files" />
-  `;
-
-  // Wire up buttons
-  setTimeout(() => {
-    const btn = body.querySelector('#jl-deploy-oauth-btn') as HTMLButtonElement;
-    const clearBtn = body.querySelector('#jl-deploy-clear-token') as HTMLButtonElement;
-    const tokenInput = body.querySelector('#jl-deploy-token') as HTMLInputElement;
-    const proxyInput = body.querySelector('#jl-deploy-proxy') as HTMLInputElement;
-    const rememberCb = body.querySelector('#jl-deploy-remember-token') as HTMLInputElement;
-    if (btn) {
-      btn.addEventListener('click', () => {
-        void doOAuthLogin(proxyInput.value.trim(), tokenInput);
-      });
-    }
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        tokenInput.value = '';
-        rememberCb.checked = false;
-        sessionStorage.removeItem('jl-deploy-token');
-      });
-    }
-  }, 0);
-
-  return body;
-}
 
 /**
  * Parse "Name <email>" into { name, email }.
@@ -114,18 +41,19 @@ function parseAuthor(raw: string): { name: string; email: string } {
  * Perform GitHub OAuth Device Flow login.
  * Shows a dialog with the user code and verification URL,
  * polls for the token, and fills the token input.
+ * Returns the access token on success, or empty string if cancelled/failed.
  */
 async function doOAuthLogin(
   proxyUrl: string,
-  tokenInput: HTMLInputElement,
-): Promise<void> {
+  tokenInput?: HTMLInputElement,
+): Promise<string> {
   if (!proxyUrl) {
     await showDialog({
       title: 'OAuth Login',
       body: 'Please enter a CORS Proxy URL first.',
       buttons: [Dialog.okButton()],
     });
-    return;
+    return '';
   }
 
   try {
@@ -175,13 +103,16 @@ async function doOAuthLogin(
 
     if (result) {
       cacheToken(result.access_token);
-      tokenInput.value = result.access_token;
+      if (tokenInput) {
+        tokenInput.value = result.access_token;
+      }
       if (statusEl) {
         statusEl.textContent = 'Logged in successfully!';
       }
       // Dismiss the dialog after a short delay
       await new Promise(r => setTimeout(r, 800));
       Dialog.flush();
+      return result.access_token;
     }
   } catch (err: any) {
     if (err.name !== 'AbortError') {
@@ -192,6 +123,30 @@ async function doOAuthLogin(
       });
     }
   }
+  return '';
+}
+
+/**
+ * Ensure we have a valid GitHub token. Returns the cached token or
+ * triggers the OAuth Device Flow automatically.
+ * Returns empty string if the user cancels or an error occurs.
+ */
+async function ensureToken(): Promise<string> {
+  // Check session storage first
+  const cached = sessionStorage.getItem('jl-deploy-token');
+  if (cached) return cached;
+
+  // Check the oauth module's in-memory cache
+  const oauthCached = getCachedToken();
+  if (oauthCached) return oauthCached;
+
+  // No token — trigger OAuth login automatically
+  const proxyUrl = getProxyUrl();
+  const token = await doOAuthLogin(proxyUrl);
+  if (token) {
+    sessionStorage.setItem('jl-deploy-token', token);
+  }
+  return token;
 }
 
 /**
@@ -207,10 +162,31 @@ const plugin: JupyterFrontEndPlugin<void> = {
 
     app.commands.addCommand(CMD_DEPLOY, {
       label: 'Wiki3.ai Sync: Push to GitHub Pages',
-      caption: 'Push content files to a gh-pages branch via isomorphic-git',
+      caption: 'Push content files to a gh-pages branch',
       execute: async () => {
-        // ── 1. Show config dialog ────────────────────────────────────
-        const body = createDeployDialogBody();
+        // ── 1. Ensure we have a token (auto-login if needed) ─────
+        const token = await ensureToken();
+        if (!token) return; // user cancelled
+
+        // ── 2. Show lightweight config dialog ────────────────────
+        const repoDefault = getDefaultRepoUrl();
+        const body = document.createElement('div');
+        body.classList.add('jl-deploy-dialog');
+        body.innerHTML = `
+          <label for="jl-deploy-repo">Repository</label>
+          <input id="jl-deploy-repo" type="text"
+                 placeholder="https://github.com/user/repo"
+                 value="${repoDefault}" />
+
+          <label for="jl-deploy-branch">Branch</label>
+          <input id="jl-deploy-branch" type="text"
+                 value="${localStorage.getItem('jl-deploy-branch') || 'gh-pages'}" />
+
+          <label for="jl-deploy-message">Commit message</label>
+          <input id="jl-deploy-message" type="text"
+                 value="Update content files" />
+        `;
+
         const dialogResult = await showDialog({
           title: 'Push to GitHub Pages',
           body: new Widget({ node: body }),
@@ -220,55 +196,36 @@ const plugin: JupyterFrontEndPlugin<void> = {
           ],
         });
 
-        if (!dialogResult.button.accept) {
-          return;
-        }
+        if (!dialogResult.button.accept) return;
 
         const repoUrl = (
           body.querySelector('#jl-deploy-repo') as HTMLInputElement
         ).value.trim();
         const branch = (
           body.querySelector('#jl-deploy-branch') as HTMLInputElement
-        ).value.trim();
-        const token = (
-          body.querySelector('#jl-deploy-token') as HTMLInputElement
-        ).value.trim();
-        const authorRaw = (
-          body.querySelector('#jl-deploy-author') as HTMLInputElement
-        ).value.trim();
+        ).value.trim() || 'gh-pages';
         const message = (
           body.querySelector('#jl-deploy-message') as HTMLInputElement
-        ).value.trim();
-        const proxyUrl = (
-          body.querySelector('#jl-deploy-proxy') as HTMLInputElement
-        ).value.trim();
+        ).value.trim() || 'Update content files';
 
-        if (!repoUrl || !token) {
+        if (!repoUrl) {
           void showDialog({
             title: 'Push Error',
-            body: 'Repository URL and GitHub Token are required.',
+            body: 'Repository URL is required.',
             buttons: [Dialog.okButton()],
           });
           return;
         }
 
-        // Persist non-secret settings for convenience
+        // Persist settings for next time
         localStorage.setItem('jl-deploy-repo', repoUrl);
         localStorage.setItem('jl-deploy-branch', branch);
-        localStorage.setItem('jl-deploy-author', authorRaw);
-        if (proxyUrl) localStorage.setItem('jl-deploy-proxy', proxyUrl);
-        // Only remember token if checkbox is checked
-        const rememberToken = (body.querySelector('#jl-deploy-remember-token') as HTMLInputElement)?.checked;
-        if (rememberToken) {
-          sessionStorage.setItem('jl-deploy-token', token);
-        } else {
-          sessionStorage.removeItem('jl-deploy-token');
-        }
 
-        const { name: authorName, email: authorEmail } =
-          parseAuthor(authorRaw);
+        const proxyUrl = getProxyUrl();
+        const authorRaw = localStorage.getItem('jl-deploy-author') || 'Wiki3 Bot <deploy@wiki3.ai>';
+        const { name: authorName, email: authorEmail } = parseAuthor(authorRaw);
 
-        // ── 2. Collect files ──────────────────────────────────────────
+        // ── 3. Collect files + push ──────────────────────────────
         const statusNode = document.createElement('pre');
         statusNode.classList.add('jl-deploy-status');
         statusNode.textContent = 'Collecting files…\n';
@@ -292,15 +249,14 @@ const plugin: JupyterFrontEndPlugin<void> = {
           );
           log(`Collected ${files.length} file(s).`);
 
-          // ── 3. Push ──────────────────────────────────────────────
           await deployToGitHub(files, {
             repoUrl,
-            branch: branch || 'gh-pages',
+            branch,
             token,
-            message: message || 'Update content files',
+            message,
             authorName,
             authorEmail,
-            proxyUrl: proxyUrl || getProxyUrl(),
+            proxyUrl,
             onProgress: log,
           });
 
@@ -311,11 +267,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
           log(`\nERROR: ${errMsg}`);
         }
 
-        // Replace the modeless progress dialog with a closeable one
-        // (the Dialog promise resolves when dismissed by code below)
-        // We wait a beat so the user can read the final status.
         await new Promise(r => setTimeout(r, 300));
-        // Close the progress dialog by resolving it
         Dialog.flush();
 
         // Show final status
@@ -335,34 +287,55 @@ const plugin: JupyterFrontEndPlugin<void> = {
       label: 'Wiki3.ai Sync: Pull from Repository',
       caption: 'Pull latest content files from a git branch into JupyterLite',
       execute: async () => {
-        const syncBody = createSyncDialogBody();
+        // ── 1. Ensure we have a token (auto-login if needed) ─────
+        // Token is optional for public repos, but try to get one
+        const token = await ensureToken();
+        // Don't block on missing token — public repos work without it
+
+        // ── 2. Show lightweight config dialog ────────────────────
+        const repoDefault = getDefaultRepoUrl();
+        const syncBody = document.createElement('div');
+        syncBody.classList.add('jl-deploy-dialog');
+        syncBody.innerHTML = `
+          <label for="jl-sync-repo">Repository</label>
+          <input id="jl-sync-repo" type="text"
+                 placeholder="https://github.com/user/repo"
+                 value="${repoDefault}" />
+
+          <label for="jl-sync-branch">Branch</label>
+          <input id="jl-sync-branch" type="text"
+                 value="${localStorage.getItem('jl-sync-branch') || 'gh-pages'}" />
+
+          <label for="jl-sync-path">Content subdirectory</label>
+          <input id="jl-sync-path" type="text"
+                 placeholder="e.g. files (empty = sync all)"
+                 value="${localStorage.getItem('jl-sync-path') || 'files'}" />
+
+          <p style="font-size: 0.85em; color: var(--jp-ui-font-color2); margin-top: 8px;">
+            This will pull files from the repository and update your local
+            JupyterLite file system.
+          </p>
+        `;
+
         const syncResult = await showDialog({
-          title: 'Sync Files from Repository',
+          title: 'Pull from Repository',
           body: new Widget({ node: syncBody }),
           buttons: [
             Dialog.cancelButton(),
-            Dialog.okButton({ label: 'Sync' }),
+            Dialog.okButton({ label: 'Pull' }),
           ],
         });
 
-        if (!syncResult.button.accept) {
-          return;
-        }
+        if (!syncResult.button.accept) return;
 
         const repoUrl = (
           syncBody.querySelector('#jl-sync-repo') as HTMLInputElement
         ).value.trim();
         const branch = (
           syncBody.querySelector('#jl-sync-branch') as HTMLInputElement
-        ).value.trim();
-        const token = (
-          syncBody.querySelector('#jl-sync-token') as HTMLInputElement
-        ).value.trim();
+        ).value.trim() || 'gh-pages';
         const contentPath = (
           syncBody.querySelector('#jl-sync-path') as HTMLInputElement
-        ).value.trim();
-        const proxyUrl = (
-          syncBody.querySelector('#jl-sync-proxy') as HTMLInputElement
         ).value.trim();
 
         if (!repoUrl) {
@@ -378,13 +351,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
         localStorage.setItem('jl-deploy-repo', repoUrl);
         localStorage.setItem('jl-sync-branch', branch);
         localStorage.setItem('jl-sync-path', contentPath);
-        if (proxyUrl) localStorage.setItem('jl-deploy-proxy', proxyUrl);
-        const rememberSyncToken = (syncBody.querySelector('#jl-sync-remember-token') as HTMLInputElement)?.checked;
-        if (token && rememberSyncToken) {
-          sessionStorage.setItem('jl-deploy-token', token);
-        } else if (!rememberSyncToken) {
-          sessionStorage.removeItem('jl-deploy-token');
-        }
+
+        const proxyUrl = getProxyUrl();
 
         // Show progress
         const statusNode = document.createElement('pre');
@@ -408,10 +376,10 @@ const plugin: JupyterFrontEndPlugin<void> = {
             app.serviceManager.contents,
             {
               repoUrl,
-              branch: branch || 'gh-pages',
+              branch,
               token,
               contentPath,
-              proxyUrl: proxyUrl || getProxyUrl(),
+              proxyUrl,
               onProgress: log,
             }
           );
@@ -443,44 +411,8 @@ const plugin: JupyterFrontEndPlugin<void> = {
       label: 'Wiki3.ai Sync: Login with GitHub',
       caption: 'Authenticate with GitHub using the OAuth Device Flow',
       execute: async () => {
-        const proxyUrl = localStorage.getItem('jl-deploy-proxy') || getProxyUrl() || '';
-        if (!proxyUrl) {
-          // Ask for proxy URL first if none is configured
-          const node = document.createElement('div');
-          node.innerHTML = `
-            <label for="jl-login-proxy">CORS Proxy URL</label>
-            <input id="jl-login-proxy" type="text"
-                   placeholder="https://your-worker.workers.dev" />
-          `;
-          const result = await showDialog({
-            title: 'GitHub OAuth Login',
-            body: new Widget({ node }),
-            buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Continue' })],
-          });
-          if (!result.button.accept) {
-            return;
-          }
-          const proxy = (node.querySelector('#jl-login-proxy') as HTMLInputElement).value.trim();
-          if (!proxy) {
-            return;
-          }
-          localStorage.setItem('jl-deploy-proxy', proxy);
-          // Now launch OAuth with the proxy
-          const dummyInput = document.createElement('input');
-          dummyInput.type = 'hidden';
-          await doOAuthLogin(proxy, dummyInput);
-          if (dummyInput.value) {
-            sessionStorage.setItem('jl-deploy-token', dummyInput.value);
-            console.log('jupyterlite-deploy: OAuth login successful');
-          }
-          return;
-        }
-        // Proxy is already configured — go straight to OAuth
-        const dummyInput = document.createElement('input');
-        dummyInput.type = 'hidden';
-        await doOAuthLogin(proxyUrl, dummyInput);
-        if (dummyInput.value) {
-          sessionStorage.setItem('jl-deploy-token', dummyInput.value);
+        const token = await ensureToken();
+        if (token) {
           console.log('jupyterlite-deploy: OAuth login successful');
         }
       },
@@ -498,77 +430,3 @@ const plugin: JupyterFrontEndPlugin<void> = {
 };
 
 export default plugin;
-
-/**
- * Build the sync configuration dialog body.
- */
-function createSyncDialogBody(): HTMLElement {
-  const body = document.createElement('div');
-  body.classList.add('jl-deploy-dialog');
-  body.innerHTML = `
-    <label for="jl-sync-proxy">CORS Proxy URL</label>
-    <input id="jl-sync-proxy" type="text"
-           placeholder="https://your-worker.workers.dev"
-           value="${localStorage.getItem('jl-deploy-proxy') ?? ''}" />
-
-    <label for="jl-sync-repo">Repository URL</label>
-    <input id="jl-sync-repo" type="text"
-           placeholder="https://github.com/user/repo.git"
-           value="${localStorage.getItem('jl-deploy-repo') ?? ''}" />
-
-    <label for="jl-sync-branch">Branch</label>
-    <input id="jl-sync-branch" type="text"
-           value="${localStorage.getItem('jl-sync-branch') || 'gh-pages'}" />
-
-    <label for="jl-sync-token">GitHub Token (optional for public repos)</label>
-    <div style="display: flex; gap: 4px; align-items: center;">
-      <input id="jl-sync-token" type="password" style="flex: 1;"
-             placeholder="ghp_… (leave empty for public repos)"
-             value="${sessionStorage.getItem('jl-deploy-token') ?? ''}" />
-      <button id="jl-sync-oauth-btn" type="button"
-              style="white-space: nowrap; padding: 2px 8px;">Login with GitHub</button>
-      <button id="jl-sync-clear-token" type="button"
-              style="white-space: nowrap; padding: 2px 8px;">Clear</button>
-    </div>
-    <div style="margin-top: 4px;">
-      <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer;">
-        <input id="jl-sync-remember-token" type="checkbox"
-               ${sessionStorage.getItem('jl-deploy-token') ? 'checked' : ''} />
-        Remember token for this session
-      </label>
-    </div>
-
-    <label for="jl-sync-path">Content subdirectory (optional)</label>
-    <input id="jl-sync-path" type="text"
-           placeholder="e.g. files (empty = sync all)"
-           value="${localStorage.getItem('jl-sync-path') || 'files'}" />
-
-    <p style="font-size: 0.85em; color: var(--jp-ui-font-color2); margin-top: 8px;">
-      This will pull files from the repository and update your local
-      JupyterLite file system, replacing any stale cached versions.
-    </p>
-  `;
-
-  // Wire up buttons
-  setTimeout(() => {
-    const btn = body.querySelector('#jl-sync-oauth-btn') as HTMLButtonElement;
-    const clearBtn = body.querySelector('#jl-sync-clear-token') as HTMLButtonElement;
-    const tokenInput = body.querySelector('#jl-sync-token') as HTMLInputElement;
-    const proxyInput = body.querySelector('#jl-sync-proxy') as HTMLInputElement;
-    const rememberCb = body.querySelector('#jl-sync-remember-token') as HTMLInputElement;
-    if (btn) {
-      btn.addEventListener('click', () => {
-        void doOAuthLogin(proxyInput.value.trim(), tokenInput);
-      });
-    }
-    if (clearBtn) {
-      clearBtn.addEventListener('click', () => {
-        tokenInput.value = '';
-        rememberCb.checked = false;
-        sessionStorage.removeItem('jl-deploy-token');
-      });
-    }
-  }, 0);
-
-  return body;
-}

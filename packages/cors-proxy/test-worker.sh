@@ -86,6 +86,34 @@ fi
 check_cors_header "Preflight CORS header" "$WORKER_URL/oauth/status" "OPTIONS"
 echo ""
 
+# ── 2b. CORS preflight for API proxy (X-GitHub-Api-Version) ─────────
+echo "2b. CORS preflight for API proxy"
+preflight_url="$WORKER_URL/proxy/https://api.github.com/repos/wiki3-ai/jupyterlite-demo/git/ref/heads/gh-pages"
+preflight_headers=$(curl -s -D- -o /dev/null -X OPTIONS \
+  -H "Origin: $ORIGIN" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: Authorization,X-GitHub-Api-Version,Accept,Content-Type" \
+  "$preflight_url")
+preflight_status=$(echo "$preflight_headers" | head -1 | awk '{print $2}')
+if [[ "$preflight_status" == "204" ]]; then
+  pass "OPTIONS returns 204"
+else
+  fail "OPTIONS — expected 204, got $preflight_status"
+fi
+allow_hdrs=$(echo "$preflight_headers" | grep -i '^access-control-allow-headers:' | tr -d '\r')
+if echo "$allow_hdrs" | grep -qi 'x-github-api-version'; then
+  pass "Allow-Headers includes X-GitHub-Api-Version"
+else
+  fail "Missing X-GitHub-Api-Version in Allow-Headers: $allow_hdrs"
+fi
+allow_methods=$(echo "$preflight_headers" | grep -i '^access-control-allow-methods:' | tr -d '\r')
+if echo "$allow_methods" | grep -q 'PATCH'; then
+  pass "Allow-Methods includes PATCH"
+else
+  fail "Missing PATCH in Allow-Methods: $allow_methods"
+fi
+echo ""
+
 # ── 3. Git proxy — public repo smart HTTP discovery ─────────────────
 echo "3. Git proxy (/proxy/ → github.com)"
 check_status "info/refs returns 200" \

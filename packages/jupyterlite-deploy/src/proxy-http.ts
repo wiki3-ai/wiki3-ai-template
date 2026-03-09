@@ -37,16 +37,54 @@ export function makeProxyHttp(proxyBaseUrl?: string | null) {
   };
 }
 
+/** Default CORS proxy URL for the Wiki3.ai Sync worker. */
+const DEFAULT_PROXY_URL = 'https://wiki3-ai-sync-proxy.jim-2ad.workers.dev';
+
 /**
- * The default proxy URL. Override via localStorage or env.
- * Users can set `localStorage.setItem('jl-deploy-proxy', 'https://...')`
- * to use a custom proxy.
+ * The proxy URL to use. Checks localStorage override, falls back to the
+ * built-in default so users never need to configure it.
  */
 export function getProxyUrl(): string {
   if (typeof localStorage !== 'undefined') {
     const custom = localStorage.getItem('jl-deploy-proxy');
     if (custom) return custom;
   }
-  // Default — users must deploy their own worker and set this
+  return DEFAULT_PROXY_URL;
+}
+
+/**
+ * Auto-detect the GitHub repo URL from the current site's location.
+ * Works for GitHub Pages sites: https://<org>.github.io/<repo>/
+ * Returns empty string if detection fails.
+ */
+export function detectRepoUrl(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const { hostname, pathname } = window.location;
+    // Match <org>.github.io
+    const m = hostname.match(/^([^.]+)\.github\.io$/);
+    if (m) {
+      const org = m[1];
+      // The first path segment is the repo name
+      const segments = pathname.split('/').filter(Boolean);
+      const repo = segments[0];
+      if (repo) {
+        return `https://github.com/${org}/${repo}`;
+      }
+    }
+  } catch {
+    // ignore
+  }
   return '';
+}
+
+/**
+ * Get the default repo URL: check localStorage, then auto-detect from site URL.
+ */
+export function getDefaultRepoUrl(): string {
+  if (typeof localStorage !== 'undefined') {
+    const saved = localStorage.getItem('jl-deploy-repo');
+    if (saved) return saved;
+  }
+  return detectRepoUrl();
 }

@@ -277,10 +277,10 @@ function corsResponse(response: Response, origin: string, env: Env): Response {
 
   const headers = new Headers(response.headers);
   headers.set('Access-Control-Allow-Origin', allowOrigin);
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   headers.set(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, Accept, X-Requested-With'
+    'Content-Type, Authorization, Accept, X-Requested-With, X-GitHub-Api-Version'
   );
   headers.set('Access-Control-Expose-Headers', '*');
   headers.set('Access-Control-Max-Age', '86400');
