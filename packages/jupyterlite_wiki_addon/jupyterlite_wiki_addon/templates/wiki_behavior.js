@@ -28,7 +28,7 @@
     }
     event.preventDefault();
     const shareTarget = trigger.getAttribute('data-share') || window.location.pathname;
-    const url = new URL(shareTarget, window.location.origin).toString();
+    const url = new URL(shareTarget, window.location.href).toString();
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(url).then(() => {
         trigger.classList.add('wiki-share-success');

@@ -164,34 +164,34 @@ class WikiPageAddon(BaseAddon):
             "metadata": {"name": notebook_path.stem},
             "wiki_toolbar": {
                 "title": notebook_title,
-                "home_href": "/",
+                "home_href": (relative_root / "wiki" / "index.html").as_posix(),
                 "breadcrumbs": breadcrumbs,
                 "actions": [
                     {
                         "kind": "link",
                         "label": "edit",
-                        "href": f"/notebooks/index.html?path={rel_path_url}",
+                        "href": (relative_root / "notebooks" / "index.html").as_posix() + f"?path={rel_path_url}",
                         "new_tab": True,
                         "download": False,
                     },
                     {
                         "kind": "link",
                         "label": "lab",
-                        "href": f"/lab/index.html?path={rel_path_url}",
+                        "href": (relative_root / "lab" / "index.html").as_posix() + f"?path={rel_path_url}",
                         "new_tab": True,
                         "download": False,
                     },
                     {
                         "kind": "link",
                         "label": "down",
-                        "href": f"/files/{rel_path_url}",
+                        "href": (relative_root / "files").as_posix() + f"/{rel_path_url}",
                         "new_tab": False,
                         "download": True,
                     },
                     {
                         "kind": "button",
                         "label": "share",
-                        "share_href": '/' + quote(static_output.as_posix(), safe='/'),
+                        "share_href": output_file.name,
                         "aria_label": "Copy share link",
                     },
                 ],
@@ -278,10 +278,10 @@ class WikiPageAddon(BaseAddon):
 
             template_entries.append({
                 'html_href': html_href,
-                'edit_href': f"/notebooks/index.html?path={rel_path_url}",
-                'lab_href': f"/lab/index.html?path={rel_path_url}",
-                'download_href': f"/files/{rel_path_url}",
-                'static_href': static_href,
+                'edit_href': (relative_root / "notebooks" / "index.html").as_posix() + f"?path={rel_path_url}",
+                'lab_href': (relative_root / "lab" / "index.html").as_posix() + f"?path={rel_path_url}",
+                'download_href': (relative_root / "files").as_posix() + f"/{rel_path_url}",
+                'static_href': html_href,
                 'title_attr': title_attr,
                 'rel_display': rel_display,
             })
