@@ -20,5 +20,21 @@
             }
         }
     },
-    "postCreateCommand": "pip install -e . && jupyter lite build"
+    "forwardPorts": [
+        8000
+    ],
+    "portsAttributes": {
+        "8000": {
+            "label": "JupyterLite",
+            "protocol": "http",
+            "onAutoForward": "openBrowserOnce",
+            "requireLocalPort": true
+        }
+    },
+    "containerEnv": {
+        "JUPYTERLITE_PORT": "8000",
+        "RESTARTABLE": "yes"
+    },
+    "postCreateCommand": "pip install -e .",
+    "postStartCommand": "jupyter lite serve"
 }
