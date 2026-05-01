@@ -1,9 +1,13 @@
 {
-    "name": "JupyterLite Demo",
+    "name": "Wiki3 Template",
     "build": {
         "dockerfile": "Dockerfile",
         "context": ".."
     },
+    "runArgs": [
+        "--cpus=2",
+        "--memory=6g"
+    ],
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "20"
